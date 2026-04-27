@@ -1,0 +1,59 @@
+version: 2
+
+project_name: mcp-jetkvm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: mcp-jetkvm
+    main: ./cmd/mcp-jetkvm
+    binary: mcp-jetkvm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: mcp-jetkvm
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: mcp-jetkvm
+    repository:
+      owner: conallob
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/conallob/mcp-jetkvm
+    description: MCP server for JetKVM device control, screenshots, and video capture
+    license: BSD-3-Clause
+    dependencies:
+      - name: ffmpeg
+    install: |
+      bin.install "mcp-jetkvm"
+    test: |
+      system "#{bin}/mcp-jetkvm", "--help" rescue nil
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
