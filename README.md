@@ -1,5 +1,7 @@
 # mcp-jetkvm
 
+[![codecov](https://codecov.io/gh/conallob/mcp-jetkvm/branch/main/graph/badge.svg)](https://codecov.io/gh/conallob/mcp-jetkvm)
+
 A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM](https://jetkvm.com) device, including capturing screenshots and video from the connected machine's display.
 
 ## Tools
