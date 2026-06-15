@@ -21,9 +21,12 @@ type Client struct {
 // NewClient creates an authenticated client for the given host.
 // password may be empty if the device is in noPassword mode.
 func NewClient(ctx context.Context, host, password string) (*Client, error) {
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		host = "http://" + host
+	}
 	jar, _ := cookiejar.New(nil)
 	c := &Client{
-		baseURL: "http://" + host,
+		baseURL: host,
 		http:    &http.Client{Jar: jar},
 	}
 	if err := c.login(ctx, password); err != nil {
