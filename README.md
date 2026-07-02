@@ -2,7 +2,7 @@
 
 [![codecov](https://codecov.io/gh/conallob/mcp-jetkvm/branch/main/graph/badge.svg)](https://codecov.io/gh/conallob/mcp-jetkvm)
 
-A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM](https://jetkvm.com) device, including capturing screenshots and video from the connected machine's display.
+A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM](https://jetkvm.com) device, including capturing screenshots and video from the connected machine's display, and mounting/configuring virtual USB boot devices.
 
 ## Tools
 
@@ -10,6 +10,17 @@ A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM
 |------|-------------|
 | `take_screenshot` | Capture a PNG screenshot from the JetKVM device. Returns the image inline or saves it to a file. |
 | `record_video` | Record an MP4 video clip from the JetKVM device for 1–60 seconds. |
+| `list_virtual_media_files` | List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the device, plus remaining storage space. |
+| `get_virtual_media_state` | Get the image currently mounted as a virtual USB boot device, if any. |
+| `check_virtual_media_url` | Check whether a remote HTTP(S) URL can be mounted directly without downloading it to the device first. |
+| `mount_virtual_media` | Mount an image (from device storage or an HTTP(S) URL) as a virtual USB CD/DVD or disk drive so the target host can boot from it. |
+| `unmount_virtual_media` | Unmount the currently mounted virtual USB boot device. |
+| `delete_virtual_media_file` | Delete an image file from the device's local storage. |
+| `get_usb_devices` | Get which virtual USB device classes (mice, keyboard, mass storage, serial console, audio) are presented to the host. |
+| `set_usb_devices` | Configure the full set of virtual USB device classes presented to the host. |
+| `set_usb_device_state` | Enable or disable a single virtual USB device class without changing the others. |
+| `get_usb_emulation_state` | Check whether the device's USB controller is currently bound to the host. |
+| `set_usb_emulation_state` | Bind or unbind the device's USB controller, turning all USB emulation on or off. |
 
 ## Requirements
 
@@ -62,13 +73,16 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ## How it works
 
-JetKVM streams the connected machine's display exclusively over WebRTC (H.264). This server:
+JetKVM streams the connected machine's display exclusively over WebRTC (H.264), and exposes device configuration (including virtual media and USB gadget settings) via JSON-RPC 2.0 over a WebRTC data channel. This server:
 
 1. Authenticates with the device (`POST /auth/login-local`)
 2. Establishes a WebRTC session via the legacy SDP exchange endpoint (`POST /webrtc/session`)
-3. Receives the H.264 RTP video stream via [pion/webrtc](https://github.com/pion/webrtc)
-4. For **screenshots**: captures the first IDR keyframe and decodes it to PNG via `ffmpeg`
-5. For **video**: pipes H.264 NAL units into `ffmpeg` and muxes them into a fragmented MP4
+3. For **screenshots/video**: receives the H.264 RTP video stream via [pion/webrtc](https://github.com/pion/webrtc)
+   - **screenshots**: captures the first IDR keyframe and decodes it to PNG via `ffmpeg`
+   - **video**: pipes H.264 NAL units into `ffmpeg` and muxes them into a fragmented MP4
+4. For **virtual media / USB device tools**: opens the `rpc` data channel and issues JSON-RPC 2.0 requests (e.g. `mountWithStorage`, `getUsbDevices`), matching responses by request ID
+
+Each tool call opens its own short-lived WebRTC session against the device and tears it down afterward.
 
 ## Releases
 

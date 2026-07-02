@@ -142,6 +142,96 @@ func TestHandleRecordVideoDurationClamping(t *testing.T) {
 	}
 }
 
+func TestHandleCheckVirtualMediaURLValidation(t *testing.T) {
+	req := callToolRequest(map[string]interface{}{})
+	_, err := handleCheckVirtualMediaURL(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for missing url")
+	}
+}
+
+func TestHandleMountVirtualMediaValidation(t *testing.T) {
+	t.Run("invalid mode", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"source": "storage", "filename": "x.iso", "mode": "bogus"})
+		_, err := handleMountVirtualMedia(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for invalid mode")
+		}
+	})
+
+	t.Run("invalid source", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"source": "bogus"})
+		_, err := handleMountVirtualMedia(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for invalid source")
+		}
+	})
+
+	t.Run("storage source missing filename", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"source": "storage"})
+		_, err := handleMountVirtualMedia(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for missing filename")
+		}
+	})
+
+	t.Run("http source missing url", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"source": "http"})
+		_, err := handleMountVirtualMedia(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for missing url")
+		}
+	})
+}
+
+func TestHandleDeleteVirtualMediaFileValidation(t *testing.T) {
+	req := callToolRequest(map[string]interface{}{})
+	_, err := handleDeleteVirtualMediaFile(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for missing filename")
+	}
+}
+
+func TestHandleSetUSBDevicesValidation(t *testing.T) {
+	req := callToolRequest(map[string]interface{}{
+		"absolute_mouse": true,
+		"relative_mouse": true,
+		"keyboard":       true,
+		"mass_storage":   true,
+		// serial_console and audio omitted
+	})
+	_, err := handleSetUSBDevices(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for missing boolean fields")
+	}
+}
+
+func TestHandleSetUSBDeviceStateValidation(t *testing.T) {
+	t.Run("missing device", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"enabled": true})
+		_, err := handleSetUSBDeviceState(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for missing device")
+		}
+	})
+
+	t.Run("missing enabled", func(t *testing.T) {
+		req := callToolRequest(map[string]interface{}{"device": "massStorage"})
+		_, err := handleSetUSBDeviceState(context.Background(), req)
+		if err == nil {
+			t.Fatal("expected error for missing enabled")
+		}
+	})
+}
+
+func TestHandleSetUSBEmulationStateValidation(t *testing.T) {
+	req := callToolRequest(map[string]interface{}{})
+	_, err := handleSetUSBEmulationState(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for missing enabled")
+	}
+}
+
 func TestNewPeerConnection(t *testing.T) {
 	pc, err := newPeerConnection()
 	if err != nil {

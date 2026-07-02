@@ -25,15 +25,21 @@ func newPeerConnection() (*webrtc.PeerConnection, error) {
 	})
 }
 
-// negotiate adds a recvonly video transceiver, creates an offer, waits for ICE
-// gathering to complete, exchanges SDP with the device, and sets the remote answer.
+// negotiate adds a recvonly video transceiver and completes SDP negotiation
+// with the device.
 func negotiate(ctx context.Context, pc *webrtc.PeerConnection, client *Client) error {
 	if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeVideo, webrtc.RTPTransceiverInit{
 		Direction: webrtc.RTPTransceiverDirectionRecvonly,
 	}); err != nil {
 		return fmt.Errorf("add transceiver: %w", err)
 	}
+	return completeNegotiation(ctx, pc, client)
+}
 
+// completeNegotiation creates an offer from whatever transceivers/data
+// channels have already been added to pc, waits for ICE gathering to
+// complete, exchanges SDP with the device, and sets the remote answer.
+func completeNegotiation(ctx context.Context, pc *webrtc.PeerConnection, client *Client) error {
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		return fmt.Errorf("create offer: %w", err)
