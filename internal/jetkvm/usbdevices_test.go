@@ -39,9 +39,9 @@ func TestUSBDevicesRPCCalls(t *testing.T) {
 }
 
 func TestUSBDevicesMutationRPCCalls(t *testing.T) {
-	calledMethods := map[string]bool{}
+	recorder := newMethodRecorder()
 	_, client := deviceRPCServer(t, func(method string) any {
-		calledMethods[method] = true
+		recorder.record(method)
 		return nil
 	})
 
@@ -59,7 +59,7 @@ func TestUSBDevicesMutationRPCCalls(t *testing.T) {
 	}
 
 	for _, method := range []string{"setUsbDevices", "setUsbDeviceState", "setUsbEmulationState"} {
-		if !calledMethods[method] {
+		if !recorder.wasCalled(method) {
 			t.Errorf("expected %s to be called", method)
 		}
 	}

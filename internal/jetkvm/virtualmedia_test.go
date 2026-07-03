@@ -64,13 +64,12 @@ func TestVirtualMediaRPCCalls(t *testing.T) {
 			t.Fatalf("unexpected info: %+v", info)
 		}
 	})
-
 }
 
 func TestVirtualMediaMutationRPCCalls(t *testing.T) {
-	calledMethods := map[string]bool{}
+	recorder := newMethodRecorder()
 	_, client := deviceRPCServer(t, func(method string) any {
-		calledMethods[method] = true
+		recorder.record(method)
 		return nil
 	})
 
@@ -91,7 +90,7 @@ func TestVirtualMediaMutationRPCCalls(t *testing.T) {
 	}
 
 	for _, method := range []string{"mountWithStorage", "mountWithHTTP", "unmountImage", "deleteStorageFile"} {
-		if !calledMethods[method] {
+		if !recorder.wasCalled(method) {
 			t.Errorf("expected %s to be called", method)
 		}
 	}
