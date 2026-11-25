@@ -45,7 +45,7 @@ func TestRequireFFmpeg(t *testing.T) {
 func TestMakeClient(t *testing.T) {
 	t.Run("missing JETKVM_HOST", func(t *testing.T) {
 		os.Unsetenv("JETKVM_HOST")
-		_, err := makeClient(context.Background())
+		_, err := makeClient(context.Background(), "")
 		if err == nil {
 			t.Fatal("expected error when JETKVM_HOST is unset")
 		}
@@ -57,7 +57,7 @@ func TestMakeClient(t *testing.T) {
 		os.Setenv("JETKVM_HOST", srv.URL)
 		defer os.Unsetenv("JETKVM_HOST")
 
-		c, err := makeClient(context.Background())
+		c, err := makeClient(context.Background(), "")
 		if err != nil {
 			t.Fatalf("makeClient: %v", err)
 		}
