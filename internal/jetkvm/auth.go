@@ -111,7 +111,7 @@ func (o OAuthOptions) introspect(ctx context.Context, client *http.Client, token
 	if err != nil {
 		return result, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}

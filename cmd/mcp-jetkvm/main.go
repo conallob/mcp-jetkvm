@@ -40,7 +40,7 @@ func parseOptions(args []string, getenv func(string) string, output io.Writer) (
 	)
 	fs.Usage = func() {
 		fs.PrintDefaults()
-		fmt.Fprintln(output, "secrets are read from the environment: JETKVM_MCP_BEARER_TOKEN (--auth bearer), JETKVM_MCP_OAUTH_CLIENT_SECRET (--auth oauth2)")
+		_, _ = fmt.Fprintln(output, "secrets are read from the environment: JETKVM_MCP_BEARER_TOKEN (--auth bearer), JETKVM_MCP_OAUTH_CLIENT_SECRET (--auth oauth2)")
 	}
 	if err := fs.Parse(args); err != nil {
 		return jetkvm.Options{}, err

@@ -1,0 +1,15 @@
+version: "2"
+
+# The default linters (errcheck, govet, ineffassign, staticcheck, unused) plus gofmt.
+linters:
+  default: standard
+  exclusions:
+    rules:
+      # Tests routinely ignore cleanup and test-server write errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

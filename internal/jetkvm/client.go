@@ -47,7 +47,7 @@ func (c *Client) login(ctx context.Context, password string) error {
 	if err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("login failed: HTTP %d", resp.StatusCode)
 	}
@@ -79,7 +79,7 @@ func (c *Client) ExchangeSDP(ctx context.Context, offer *webrtc.SessionDescripti
 	if err != nil {
 		return nil, fmt.Errorf("SDP exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("SDP exchange failed: HTTP %d", resp.StatusCode)
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"time"
 
@@ -154,7 +155,7 @@ func TakeScreenshot(ctx context.Context, client *Client) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	type result struct {
 		h264 []byte
@@ -197,7 +198,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	if err != nil {
 		return err
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	pr, pw := io.Pipe()
 	ffmpegErr := make(chan error, 1)
@@ -225,16 +226,16 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	})
 
 	if err := negotiate(ctx, pc, client); err != nil {
-		pw.CloseWithError(err)
-		<-ffmpegErr
+		_ = pw.CloseWithError(err)
+		waitFFmpeg(ffmpegErr)
 		return err
 	}
 
 	var track *webrtc.TrackRemote
 	select {
 	case <-ctx.Done():
-		pw.CloseWithError(ctx.Err())
-		<-ffmpegErr
+		_ = pw.CloseWithError(ctx.Err())
+		waitFFmpeg(ffmpegErr)
 		return ctx.Err()
 	case track = <-trackReady:
 	}
@@ -257,6 +258,14 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 			break
 		}
 	}
-	pw.Close()
+	_ = pw.Close()
 	return <-ffmpegErr
+}
+
+// waitFFmpeg waits for ffmpeg to exit. It is used on paths that are already
+// returning a more useful error, so ffmpeg's own is only logged.
+func waitFFmpeg(done <-chan error) {
+	if err := <-done; err != nil {
+		slog.Debug("ffmpeg exited", "error", err)
+	}
 }
