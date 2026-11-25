@@ -1,6 +1,6 @@
 module github.com/conallob/mcp-jetkvm
 
-go 1.24.0
+go 1.27.0
 
 require (
 	github.com/mark3labs/mcp-go v0.13.0
