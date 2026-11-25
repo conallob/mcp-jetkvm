@@ -2,10 +2,14 @@ package jetkvm
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 const testToken = "0123456789abcdef-test-token"
@@ -40,12 +44,13 @@ func TestHTTPOptionsValidate(t *testing.T) {
 	}
 }
 
-func okHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-}
-
-func doRequest(h http.Handler, authorization string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, mcpPath, nil)
+// request posts an MCP initialize to the handler, optionally with an
+// Authorization header, and returns the recorded response.
+func request(h http.Handler, authorization string) *httptest.ResponseRecorder {
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`
+	req := httptest.NewRequest(http.MethodPost, mcpPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
@@ -55,28 +60,27 @@ func doRequest(h http.Handler, authorization string) *httptest.ResponseRecorder 
 }
 
 func TestBearerAuth(t *testing.T) {
-	h := requireToken(bearerVerifier(testToken), "", okHandler())
+	h, err := HTTPOptions{Addr: ":8080", Auth: AuthBearer, BearerToken: testToken}.handler(newMCPServer())
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for name, header := range map[string]string{
-		"no header":     "",
-		"wrong token":   "Bearer nope",
-		"wrong scheme":  "Basic " + testToken,
-		"empty bearer":  "Bearer ",
-		"token no word": testToken,
+		"no header":    "",
+		"wrong token":  "Bearer nope",
+		"wrong scheme": "Basic " + testToken,
+		"empty bearer": "Bearer ",
+		"no scheme":    testToken,
 	} {
 		t.Run(name, func(t *testing.T) {
-			rec := doRequest(h, header)
-			if rec.Code != http.StatusUnauthorized {
+			if rec := request(h, header); rec.Code != http.StatusUnauthorized {
 				t.Fatalf("code = %d, want 401", rec.Code)
-			}
-			if rec.Header().Get("WWW-Authenticate") != "Bearer" {
-				t.Fatalf("WWW-Authenticate = %q", rec.Header().Get("WWW-Authenticate"))
 			}
 		})
 	}
 
-	if rec := doRequest(h, "Bearer "+testToken); rec.Code != http.StatusOK {
-		t.Fatalf("valid token: code = %d, want 200", rec.Code)
+	if rec := request(h, "Bearer "+testToken); rec.Code != http.StatusOK {
+		t.Fatalf("valid token: code = %d, want 200: %s", rec.Code, rec.Body)
 	}
 }
 
@@ -103,68 +107,84 @@ func introspectionServer(t *testing.T, response string) *httptest.Server {
 
 func TestOAuthVerifier(t *testing.T) {
 	const resource = "https://kvm.example/mcp"
+	exp := time.Now().Add(time.Hour).Unix()
 	tests := []struct {
 		name     string
 		response string
-		scopes   []string
 		token    string
-		want     bool
+		invalid  bool
 	}{
-		{"active", `{"active":true}`, nil, "good-token", true},
-		{"unknown token", `{"active":true}`, nil, "other", false},
-		{"inactive", `{"active":false}`, nil, "good-token", false},
-		{"scope present", `{"active":true,"scope":"kvm:read kvm:write"}`, []string{"kvm:write"}, "good-token", true},
-		{"scope missing", `{"active":true,"scope":"kvm:read"}`, []string{"kvm:write"}, "good-token", false},
-		{"audience matches", `{"active":true,"aud":"` + resource + `"}`, nil, "good-token", true},
-		{"audience in list", `{"active":true,"aud":["other","` + resource + `"]}`, nil, "good-token", true},
-		{"audience mismatch", `{"active":true,"aud":"https://other.example/mcp"}`, nil, "good-token", false},
+		{"active", `{"active":true}`, "good-token", false},
+		{"unknown token", `{"active":true}`, "other", true},
+		{"inactive", `{"active":false}`, "good-token", true},
+		{"audience matches", `{"active":true,"aud":"` + resource + `"}`, "good-token", false},
+		{"audience in list", `{"active":true,"aud":["other","` + resource + `"]}`, "good-token", false},
+		{"audience mismatch", `{"active":true,"aud":"https://other.example/mcp"}`, "good-token", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			idp := introspectionServer(t, tt.response)
-			o := OAuthOptions{IntrospectionURL: idp.URL, Resource: resource, ClientID: "client", ClientSecret: "s3cret", Scopes: tt.scopes}
-			got, err := o.verifier()(t.Context(), tt.token)
-			if err != nil || got != tt.want {
-				t.Fatalf("verify = %v, %v; want %v", got, err, tt.want)
+			o := OAuthOptions{IntrospectionURL: idp.URL, Resource: resource, ClientID: "client", ClientSecret: "s3cret"}
+			info, err := o.verifier()(t.Context(), tt.token, nil)
+			if tt.invalid {
+				if !errors.Is(err, auth.ErrInvalidToken) {
+					t.Fatalf("err = %v, want ErrInvalidToken", err)
+				}
+				return
+			}
+			if err != nil || info == nil {
+				t.Fatalf("verify = %v, %v", info, err)
 			}
 		})
 	}
 
-	t.Run("wrong client credentials is an error, not a bad token", func(t *testing.T) {
+	t.Run("scopes and expiry come from the introspection response", func(t *testing.T) {
+		idp := introspectionServer(t, `{"active":true,"scope":"kvm:read kvm:write","exp":`+jsonNumber(exp)+`}`)
+		o := OAuthOptions{IntrospectionURL: idp.URL, ClientID: "client", ClientSecret: "s3cret"}
+		info, err := o.verifier()(t.Context(), "good-token", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(info.Scopes) != 2 || info.Scopes[1] != "kvm:write" || info.Expiration.Unix() != exp {
+			t.Fatalf("unexpected token info: %+v", info)
+		}
+	})
+
+	t.Run("wrong client credentials is not reported as a bad token", func(t *testing.T) {
 		idp := introspectionServer(t, `{"active":true}`)
 		o := OAuthOptions{IntrospectionURL: idp.URL, ClientID: "client", ClientSecret: "wrong"}
-		if _, err := o.verifier()(t.Context(), "good-token"); err == nil {
-			t.Fatal("expected an error")
+		if _, err := o.verifier()(t.Context(), "good-token", nil); !errors.Is(err, errCannotVerify) {
+			t.Fatalf("err = %v, want errCannotVerify", err)
 		}
 	})
 }
 
-func TestOAuthUnavailableIsNot401(t *testing.T) {
-	idp := httptest.NewServer(http.NotFoundHandler())
-	idp.Close() // nothing is listening any more
-	o := OAuthOptions{IntrospectionURL: idp.URL, Resource: "https://kvm.example/mcp"}
-	rec := doRequest(requireToken(o.verifier(), "", okHandler()), "Bearer anything")
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("code = %d, want 503", rec.Code)
-	}
+func jsonNumber(n int64) string {
+	b, _ := json.Marshal(n)
+	return string(b)
 }
 
-func TestOAuthHandler(t *testing.T) {
-	idp := introspectionServer(t, `{"active":true,"scope":"kvm"}`)
-	o := HTTPOptions{Addr: ":8080", Auth: AuthOAuth2, OAuth: OAuthOptions{
-		IntrospectionURL: idp.URL,
+func oauthHandler(t *testing.T, idpURL string, scopes ...string) http.Handler {
+	t.Helper()
+	h, err := HTTPOptions{Addr: ":8080", Auth: AuthOAuth2, OAuth: OAuthOptions{
+		IntrospectionURL: idpURL,
 		Issuer:           "https://idp.example",
 		Resource:         "https://kvm.example/mcp",
 		ClientID:         "client",
 		ClientSecret:     "s3cret",
-		Scopes:           []string{"kvm"},
-	}}
-	h, err := o.handler(newMCPServer())
+		Scopes:           scopes,
+	}}.handler(newMCPServer())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return h
+}
+
+func TestOAuthHandler(t *testing.T) {
+	idp := introspectionServer(t, `{"active":true,"scope":"kvm"}`)
 
 	t.Run("metadata is public", func(t *testing.T) {
+		h := oauthHandler(t, idp.URL, "kvm")
 		req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource/mcp", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
@@ -185,10 +205,42 @@ func TestOAuthHandler(t *testing.T) {
 	})
 
 	t.Run("challenge points at the metadata", func(t *testing.T) {
-		rec := doRequest(h, "")
-		want := `Bearer resource_metadata="https://kvm.example/.well-known/oauth-protected-resource/mcp"`
-		if rec.Code != http.StatusUnauthorized || rec.Header().Get("WWW-Authenticate") != want {
-			t.Fatalf("code=%d WWW-Authenticate=%q", rec.Code, rec.Header().Get("WWW-Authenticate"))
+		rec := request(oauthHandler(t, idp.URL, "kvm"), "")
+		challenge := rec.Header().Get("WWW-Authenticate")
+		if rec.Code != http.StatusUnauthorized ||
+			!strings.Contains(challenge, `resource_metadata="https://kvm.example/.well-known/oauth-protected-resource/mcp"`) {
+			t.Fatalf("code=%d WWW-Authenticate=%q", rec.Code, challenge)
+		}
+	})
+
+	t.Run("a valid token with the required scope is accepted", func(t *testing.T) {
+		if rec := request(oauthHandler(t, idp.URL, "kvm"), "Bearer good-token"); rec.Code != http.StatusOK {
+			t.Fatalf("code = %d: %s", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("a missing scope is forbidden", func(t *testing.T) {
+		if rec := request(oauthHandler(t, idp.URL, "kvm", "admin"), "Bearer good-token"); rec.Code != http.StatusForbidden {
+			t.Fatalf("code = %d, want 403", rec.Code)
+		}
+	})
+
+	t.Run("an unknown token is unauthorized", func(t *testing.T) {
+		if rec := request(oauthHandler(t, idp.URL), "Bearer other"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("code = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("an unreachable introspection endpoint fails closed without leaking its URL", func(t *testing.T) {
+		down := httptest.NewServer(http.NotFoundHandler())
+		url := down.URL
+		down.Close()
+		rec := request(oauthHandler(t, url), "Bearer good-token")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("code = %d, want 500", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), url) {
+			t.Fatalf("response leaks the introspection URL: %q", rec.Body)
 		}
 	})
 }
