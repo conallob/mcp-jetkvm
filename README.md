@@ -101,6 +101,43 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+## HTTP transport
+
+By default the server speaks MCP over stdio. `--http <addr>` serves MCP over HTTP (the streamable HTTP transport) at `/mcp` instead, so one server can be shared by several clients or machines.
+
+```sh
+mcp-jetkvm --http 127.0.0.1:8080
+```
+
+This server can send keystrokes to the connected machines and boot them from mounted images, so authentication is not optional off the local machine. `--auth` selects it:
+
+| `--auth` | Behaviour |
+|----------|-----------|
+| `none` (default) | No authentication. Refused unless the listen address is loopback (`127.0.0.1`, `::1`, `localhost`). |
+| `bearer` | Requests must carry `Authorization: Bearer <token>`. The token is read from `JETKVM_MCP_BEARER_TOKEN` (at least 16 characters, so it never appears in `ps`). |
+| `oauth2` | Requests must carry an OAuth 2.0 access token from an external authorization server. The server is a resource server: it validates tokens by [introspection (RFC 7662)](https://www.rfc-editor.org/rfc/rfc7662) and publishes [protected resource metadata (RFC 9728)](https://www.rfc-editor.org/rfc/rfc9728) so MCP clients can discover where to get a token. |
+
+OAuth 2.0 flags (all but the last two are required; the client secret is read from `JETKVM_MCP_OAUTH_CLIENT_SECRET`):
+
+| Flag | Description |
+|------|-------------|
+| `--oauth-introspection-url` | The authorization server's introspection endpoint. |
+| `--oauth-issuer` | Authorization server URL, advertised to clients. |
+| `--oauth-resource` | This server's public MCP URL, e.g. `https://kvm.example/mcp`. A token that names an audience must name this. |
+| `--oauth-client-id` | Client ID this server uses to call the introspection endpoint. |
+| `--oauth-scope` | Space-separated scopes every token must have. |
+
+```sh
+export JETKVM_MCP_OAUTH_CLIENT_SECRET=...
+mcp-jetkvm --http :8080 --auth oauth2 \
+  --oauth-introspection-url https://idp.example/oauth2/introspect \
+  --oauth-issuer https://idp.example \
+  --oauth-resource https://kvm.example/mcp \
+  --oauth-client-id mcp-jetkvm --oauth-scope kvm
+```
+
+The server does not terminate TLS. Put it behind a TLS-terminating proxy (or a private network such as Tailscale) when using `bearer` or `oauth2` off the local machine, since tokens are sent in the clear otherwise. Each request is introspected, with no caching.
+
 ## How it works
 
 JetKVM streams the connected machine's display exclusively over WebRTC (H.264), and exposes device configuration (including virtual media and USB gadget settings) via JSON-RPC 2.0 over a WebRTC data channel. This server:
