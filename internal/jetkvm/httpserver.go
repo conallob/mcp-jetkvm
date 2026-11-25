@@ -2,7 +2,6 @@ package jetkvm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 const mcpPath = "/mcp"
@@ -77,44 +78,49 @@ func isLoopbackAddr(addr string) bool {
 
 // handler builds the HTTP handler: the MCP endpoint behind the chosen
 // authentication, plus the OAuth protected resource metadata when applicable.
-func (o HTTPOptions) handler(s *server.MCPServer) (http.Handler, error) {
+func (o HTTPOptions) handler(s *mcp.Server) (http.Handler, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
-	mcp := http.Handler(server.NewStreamableHTTPServer(s))
+	// The SDK rejects requests that reach a loopback listener with a foreign
+	// Host header, to stop DNS rebinding. That also rejects a reverse proxy on
+	// the same machine forwarding for its public name, so it is only kept when
+	// there is no authentication to stop a rebinding attack.
+	mcpHandler := http.Handler(mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s },
+		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: o.Auth != AuthNone},
+	))
 	mux := http.NewServeMux()
 
 	switch o.Auth {
 	case AuthBearer:
-		mcp = requireToken(bearerVerifier(o.BearerToken), "", mcp)
+		// A shared token carries no expiry.
+		mcpHandler = auth.RequireBearerToken(bearerVerifier(o.BearerToken),
+			&auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(mcpHandler)
 	case AuthOAuth2:
 		resource, _ := url.Parse(o.OAuth.Resource)
 		metadataPath := "/.well-known/oauth-protected-resource" + strings.TrimSuffix(resource.Path, "/")
 		metadataURL := resource.Scheme + "://" + resource.Host + metadataPath
-		mux.HandleFunc(metadataPath, o.OAuth.serveMetadata)
-		mcp = requireToken(o.OAuth.verifier(), metadataURL, mcp)
+		mux.Handle(metadataPath, auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+			Resource:               o.OAuth.Resource,
+			AuthorizationServers:   []string{o.OAuth.Issuer},
+			BearerMethodsSupported: []string{"header"},
+			ScopesSupported:        o.OAuth.Scopes,
+		}))
+		mcpHandler = auth.RequireBearerToken(o.OAuth.verifier(), &auth.RequireBearerTokenOptions{
+			ResourceMetadataURL: metadataURL,
+			Scopes:              o.OAuth.Scopes,
+			// Not every provider returns "exp" from introspection; an inactive
+			// token is already rejected by the verifier.
+			AllowMissingExpiration: true,
+		})(mcpHandler)
 	}
-	mux.Handle(mcpPath, mcp)
+	mux.Handle(mcpPath, mcpHandler)
 	return mux, nil
 }
 
-// serveMetadata serves the OAuth 2.0 protected resource metadata (RFC 9728),
-// which tells clients which authorization server to obtain tokens from.
-func (o OAuthOptions) serveMetadata(w http.ResponseWriter, _ *http.Request) {
-	metadata := map[string]any{
-		"resource":                 o.Resource,
-		"authorization_servers":    []string{o.Issuer},
-		"bearer_methods_supported": []string{"header"},
-	}
-	if len(o.Scopes) > 0 {
-		metadata["scopes_supported"] = o.Scopes
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metadata)
-}
-
 // serveHTTP serves MCP over HTTP until interrupted.
-func serveHTTP(s *server.MCPServer, o HTTPOptions) error {
+func serveHTTP(s *mcp.Server, o HTTPOptions) error {
 	handler, err := o.handler(s)
 	if err != nil {
 		return err

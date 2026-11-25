@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // resultText extracts the text of the first TextContent block in a tool result.
@@ -14,7 +14,7 @@ func resultText(t *testing.T, res *mcp.CallToolResult) string {
 	if res == nil || len(res.Content) == 0 {
 		t.Fatal("expected non-empty tool result content")
 	}
-	tc, ok := res.Content[0].(mcp.TextContent)
+	tc, ok := res.Content[0].(*mcp.TextContent)
 	if !ok {
 		t.Fatalf("expected TextContent, got %T", res.Content[0])
 	}
@@ -35,7 +35,7 @@ func TestHandleListVirtualMediaFilesSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleListVirtualMediaFiles(context.Background(), callToolRequest(nil))
+		res, _, err := handleListVirtualMediaFiles(context.Background(), nil, kvmOnly{})
 		if err != nil {
 			t.Fatalf("handleListVirtualMediaFiles: %v", err)
 		}
@@ -58,7 +58,7 @@ func TestHandleListVirtualMediaFilesSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleListVirtualMediaFiles(context.Background(), callToolRequest(nil))
+		res, _, err := handleListVirtualMediaFiles(context.Background(), nil, kvmOnly{})
 		if err != nil {
 			t.Fatalf("handleListVirtualMediaFiles: %v", err)
 		}
@@ -75,7 +75,7 @@ func TestHandleGetVirtualMediaStateSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleGetVirtualMediaState(context.Background(), callToolRequest(nil))
+		res, _, err := handleGetVirtualMediaState(context.Background(), nil, kvmOnly{})
 		if err != nil {
 			t.Fatalf("handleGetVirtualMediaState: %v", err)
 		}
@@ -89,7 +89,7 @@ func TestHandleGetVirtualMediaStateSuccess(t *testing.T) {
 		_, client := deviceRPCServer(t, func(method string) any { return VirtualMediaState{} })
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleGetVirtualMediaState(context.Background(), callToolRequest(nil))
+		res, _, err := handleGetVirtualMediaState(context.Background(), nil, kvmOnly{})
 		if err != nil {
 			t.Fatalf("handleGetVirtualMediaState: %v", err)
 		}
@@ -104,7 +104,7 @@ func TestHandleGetVirtualMediaStateSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleGetVirtualMediaState(context.Background(), callToolRequest(nil))
+		res, _, err := handleGetVirtualMediaState(context.Background(), nil, kvmOnly{})
 		if err != nil {
 			t.Fatalf("handleGetVirtualMediaState: %v", err)
 		}
@@ -121,7 +121,7 @@ func TestHandleCheckVirtualMediaURLSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleCheckVirtualMediaURL(context.Background(), callToolRequest(map[string]interface{}{"url": "http://example.com/x.iso"}))
+		res, _, err := handleCheckVirtualMediaURL(context.Background(), nil, checkURLInput{URL: "http://example.com/x.iso"})
 		if err != nil {
 			t.Fatalf("handleCheckVirtualMediaURL: %v", err)
 		}
@@ -136,7 +136,7 @@ func TestHandleCheckVirtualMediaURLSuccess(t *testing.T) {
 		})
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleCheckVirtualMediaURL(context.Background(), callToolRequest(map[string]interface{}{"url": "http://example.com/x.txt"}))
+		res, _, err := handleCheckVirtualMediaURL(context.Background(), nil, checkURLInput{URL: "http://example.com/x.txt"})
 		if err != nil {
 			t.Fatalf("handleCheckVirtualMediaURL: %v", err)
 		}
@@ -151,9 +151,9 @@ func TestHandleMountVirtualMediaSuccess(t *testing.T) {
 		_, client := deviceRPCServer(t, func(method string) any { return nil })
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleMountVirtualMedia(context.Background(), callToolRequest(map[string]interface{}{
-			"source": "storage", "filename": "ubuntu.iso", "mode": "cdrom",
-		}))
+		res, _, err := handleMountVirtualMedia(context.Background(), nil, mountInput{
+			Source: "storage", Filename: "ubuntu.iso", Mode: "cdrom",
+		})
 		if err != nil {
 			t.Fatalf("handleMountVirtualMedia: %v", err)
 		}
@@ -166,9 +166,9 @@ func TestHandleMountVirtualMediaSuccess(t *testing.T) {
 		_, client := deviceRPCServer(t, func(method string) any { return nil })
 		t.Setenv("JETKVM_HOST", client.baseURL)
 
-		res, err := handleMountVirtualMedia(context.Background(), callToolRequest(map[string]interface{}{
-			"source": "http", "url": "http://example.com/x.iso",
-		}))
+		res, _, err := handleMountVirtualMedia(context.Background(), nil, mountInput{
+			Source: "http", URL: "http://example.com/x.iso",
+		})
 		if err != nil {
 			t.Fatalf("handleMountVirtualMedia: %v", err)
 		}
@@ -182,7 +182,7 @@ func TestHandleUnmountVirtualMediaSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return nil })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleUnmountVirtualMedia(context.Background(), callToolRequest(nil))
+	res, _, err := handleUnmountVirtualMedia(context.Background(), nil, kvmOnly{})
 	if err != nil {
 		t.Fatalf("handleUnmountVirtualMedia: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestHandleDeleteVirtualMediaFileSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return nil })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleDeleteVirtualMediaFile(context.Background(), callToolRequest(map[string]interface{}{"filename": "ubuntu.iso"}))
+	res, _, err := handleDeleteVirtualMediaFile(context.Background(), nil, deleteFileInput{Filename: "ubuntu.iso"})
 	if err != nil {
 		t.Fatalf("handleDeleteVirtualMediaFile: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestHandleGetUSBDevicesSuccess(t *testing.T) {
 	})
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleGetUSBDevices(context.Background(), callToolRequest(nil))
+	res, _, err := handleGetUSBDevices(context.Background(), nil, kvmOnly{})
 	if err != nil {
 		t.Fatalf("handleGetUSBDevices: %v", err)
 	}
@@ -224,14 +224,12 @@ func TestHandleSetUSBDevicesSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return nil })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleSetUSBDevices(context.Background(), callToolRequest(map[string]interface{}{
-		"absolute_mouse": true,
-		"relative_mouse": true,
-		"keyboard":       true,
-		"mass_storage":   true,
-		"serial_console": false,
-		"audio":          false,
-	}))
+	res, _, err := handleSetUSBDevices(context.Background(), nil, setUSBDevicesInput{
+		AbsoluteMouse: true,
+		RelativeMouse: true,
+		Keyboard:      true,
+		MassStorage:   true,
+	})
 	if err != nil {
 		t.Fatalf("handleSetUSBDevices: %v", err)
 	}
@@ -244,9 +242,7 @@ func TestHandleSetUSBDeviceStateSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return nil })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleSetUSBDeviceState(context.Background(), callToolRequest(map[string]interface{}{
-		"device": "massStorage", "enabled": false,
-	}))
+	res, _, err := handleSetUSBDeviceState(context.Background(), nil, setUSBDeviceStateInput{Device: "massStorage"})
 	if err != nil {
 		t.Fatalf("handleSetUSBDeviceState: %v", err)
 	}
@@ -259,7 +255,7 @@ func TestHandleGetUSBEmulationStateSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return true })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleGetUSBEmulationState(context.Background(), callToolRequest(nil))
+	res, _, err := handleGetUSBEmulationState(context.Background(), nil, kvmOnly{})
 	if err != nil {
 		t.Fatalf("handleGetUSBEmulationState: %v", err)
 	}
@@ -272,7 +268,7 @@ func TestHandleSetUSBEmulationStateSuccess(t *testing.T) {
 	_, client := deviceRPCServer(t, func(method string) any { return nil })
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	res, err := handleSetUSBEmulationState(context.Background(), callToolRequest(map[string]interface{}{"enabled": true}))
+	res, _, err := handleSetUSBEmulationState(context.Background(), nil, setUSBEmulationInput{Enabled: true})
 	if err != nil {
 		t.Fatalf("handleSetUSBEmulationState: %v", err)
 	}
@@ -286,22 +282,22 @@ func TestHandleVirtualMediaAndUSBRPCErrorPropagation(t *testing.T) {
 	_, client := errorRPCServer(t)
 	t.Setenv("JETKVM_HOST", client.baseURL)
 
-	if _, err := handleListVirtualMediaFiles(context.Background(), callToolRequest(nil)); err == nil {
+	if _, _, err := handleListVirtualMediaFiles(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleListVirtualMediaFiles")
 	}
-	if _, err := handleGetVirtualMediaState(context.Background(), callToolRequest(nil)); err == nil {
+	if _, _, err := handleGetVirtualMediaState(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleGetVirtualMediaState")
 	}
-	if _, err := handleUnmountVirtualMedia(context.Background(), callToolRequest(nil)); err == nil {
+	if _, _, err := handleUnmountVirtualMedia(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleUnmountVirtualMedia")
 	}
-	if _, err := handleDeleteVirtualMediaFile(context.Background(), callToolRequest(map[string]interface{}{"filename": "x"})); err == nil {
+	if _, _, err := handleDeleteVirtualMediaFile(context.Background(), nil, deleteFileInput{Filename: "x"}); err == nil {
 		t.Fatal("expected error from handleDeleteVirtualMediaFile")
 	}
-	if _, err := handleGetUSBDevices(context.Background(), callToolRequest(nil)); err == nil {
+	if _, _, err := handleGetUSBDevices(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleGetUSBDevices")
 	}
-	if _, err := handleGetUSBEmulationState(context.Background(), callToolRequest(nil)); err == nil {
+	if _, _, err := handleGetUSBEmulationState(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleGetUSBEmulationState")
 	}
 }

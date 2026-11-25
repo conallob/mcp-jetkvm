@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
-
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // loginOKServer returns a test server that accepts any login request.
@@ -67,74 +65,47 @@ func TestMakeClient(t *testing.T) {
 	})
 }
 
-func callToolRequest(args map[string]interface{}) mcp.CallToolRequest {
-	var req mcp.CallToolRequest
-	req.Params.Arguments = args
-	return req
-}
-
 func TestHandleRecordVideoValidation(t *testing.T) {
 	t.Run("missing output_path", func(t *testing.T) {
 		if requireFFmpeg() != nil {
 			t.Skip("ffmpeg not available")
 		}
-		req := callToolRequest(map[string]interface{}{})
-		_, err := handleRecordVideo(context.Background(), req)
-		if err == nil {
+		if _, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{}); err == nil {
 			t.Fatal("expected error for missing output_path")
 		}
 	})
 
 	t.Run("no ffmpeg", func(t *testing.T) {
-		orig := os.Getenv("PATH")
-		os.Setenv("PATH", "")
-		defer os.Setenv("PATH", orig)
-
-		req := callToolRequest(map[string]interface{}{"output_path": "/tmp/out.mp4"})
-		_, err := handleRecordVideo(context.Background(), req)
-		if err == nil {
+		t.Setenv("PATH", "")
+		if _, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{OutputPath: "/tmp/out.mp4"}); err == nil {
 			t.Fatal("expected error when ffmpeg is missing")
 		}
 	})
 }
 
 func TestHandleTakeScreenshotNoFFmpeg(t *testing.T) {
-	orig := os.Getenv("PATH")
-	os.Setenv("PATH", "")
-	defer os.Setenv("PATH", orig)
-
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleTakeScreenshot(context.Background(), req)
-	if err == nil {
+	t.Setenv("PATH", "")
+	if _, _, err := handleTakeScreenshot(context.Background(), nil, screenshotInput{}); err == nil {
 		t.Fatal("expected error when ffmpeg is missing")
 	}
 }
 
 func TestHandleRecordVideoDurationClamping(t *testing.T) {
-	cases := []struct {
-		name  string
-		input interface{}
-	}{
-		{"below minimum", float64(0)},
-		{"above maximum", float64(120)},
-		{"default (no value)", nil},
-		{"valid mid-range", float64(30)},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, duration := range map[string]float64{
+		"below minimum":      0,
+		"above maximum":      120,
+		"default (no value)": 0,
+		"valid mid-range":    30,
+	} {
+		t.Run(name, func(t *testing.T) {
 			if requireFFmpeg() != nil {
 				t.Skip("ffmpeg not available")
 			}
-			os.Unsetenv("JETKVM_HOST")
-			args := map[string]interface{}{"output_path": "/tmp/out.mp4"}
-			if tc.input != nil {
-				args["duration"] = tc.input
-			}
-			req := callToolRequest(args)
-			_, err := handleRecordVideo(context.Background(), req)
-			// We expect a "JETKVM_HOST" error — that means we passed
-			// validation and clamping and reached makeClient.
+			t.Setenv("JETKVM_DEVICES", "")
+			t.Setenv("JETKVM_HOST", "")
+			// No device is configured, so reaching makeClient fails: that
+			// means validation and clamping were passed.
+			_, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{OutputPath: "/tmp/out.mp4", Duration: duration})
 			if err == nil {
 				t.Fatal("expected error from makeClient, got nil")
 			}
@@ -143,92 +114,35 @@ func TestHandleRecordVideoDurationClamping(t *testing.T) {
 }
 
 func TestHandleCheckVirtualMediaURLValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleCheckVirtualMediaURL(context.Background(), req)
-	if err == nil {
+	if _, _, err := handleCheckVirtualMediaURL(context.Background(), nil, checkURLInput{}); err == nil {
 		t.Fatal("expected error for missing url")
 	}
 }
 
 func TestHandleMountVirtualMediaValidation(t *testing.T) {
-	t.Run("invalid mode", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "storage", "filename": "x.iso", "mode": "bogus"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for invalid mode")
-		}
-	})
-
-	t.Run("invalid source", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "bogus"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for invalid source")
-		}
-	})
-
-	t.Run("storage source missing filename", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "storage"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing filename")
-		}
-	})
-
-	t.Run("http source missing url", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "http"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing url")
-		}
-	})
+	for name, in := range map[string]mountInput{
+		"invalid mode":                {Source: "storage", Filename: "x.iso", Mode: "bogus"},
+		"invalid source":              {Source: "bogus"},
+		"storage source missing file": {Source: "storage"},
+		"http source missing url":     {Source: "http"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := handleMountVirtualMedia(context.Background(), nil, in); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
 }
 
 func TestHandleDeleteVirtualMediaFileValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleDeleteVirtualMediaFile(context.Background(), req)
-	if err == nil {
+	if _, _, err := handleDeleteVirtualMediaFile(context.Background(), nil, deleteFileInput{}); err == nil {
 		t.Fatal("expected error for missing filename")
 	}
 }
 
-func TestHandleSetUSBDevicesValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{
-		"absolute_mouse": true,
-		"relative_mouse": true,
-		"keyboard":       true,
-		"mass_storage":   true,
-		// serial_console and audio omitted
-	})
-	_, err := handleSetUSBDevices(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for missing boolean fields")
-	}
-}
-
 func TestHandleSetUSBDeviceStateValidation(t *testing.T) {
-	t.Run("missing device", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"enabled": true})
-		_, err := handleSetUSBDeviceState(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing device")
-		}
-	})
-
-	t.Run("missing enabled", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"device": "massStorage"})
-		_, err := handleSetUSBDeviceState(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing enabled")
-		}
-	})
-}
-
-func TestHandleSetUSBEmulationStateValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleSetUSBEmulationState(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for missing enabled")
+	if _, _, err := handleSetUSBDeviceState(context.Background(), nil, setUSBDeviceStateInput{Enabled: true}); err == nil {
+		t.Fatal("expected error for missing device")
 	}
 }
 
