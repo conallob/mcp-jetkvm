@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestLoadDevices(t *testing.T) {
@@ -146,5 +148,34 @@ func TestHandleListDevices(t *testing.T) {
 	}
 	if strings.Contains(text, "secret-a") {
 		t.Fatal("list_devices must not reveal passwords")
+	}
+}
+
+func TestWithKVMArgument(t *testing.T) {
+	tool := withKVMArgument(mcp.NewTool("x", mcp.WithString("device")))
+	if _, ok := tool.InputSchema.Properties["kvm"]; !ok {
+		t.Fatal("kvm argument not added")
+	}
+	if _, ok := tool.InputSchema.Properties["device"]; !ok {
+		t.Fatal("existing argument was dropped")
+	}
+	for _, name := range tool.InputSchema.Required {
+		if name == "kvm" {
+			t.Fatal("kvm must stay optional in the schema")
+		}
+	}
+
+	bare := withKVMArgument(mcp.Tool{Name: "y"})
+	if _, ok := bare.InputSchema.Properties["kvm"]; !ok {
+		t.Fatal("kvm argument not added to a tool without properties")
+	}
+}
+
+func TestDeviceID(t *testing.T) {
+	if got := deviceID(callToolRequest(map[string]any{"kvm": "ctrl-2"})); got != "ctrl-2" {
+		t.Fatalf("got %q", got)
+	}
+	if got := deviceID(callToolRequest(nil)); got != "" {
+		t.Fatalf("got %q, want empty", got)
 	}
 }

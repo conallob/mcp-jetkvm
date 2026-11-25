@@ -169,6 +169,10 @@ func RunServer() error {
 // addTool registers a tool, adding the optional "kvm" argument that selects
 // which configured JetKVM the call is for.
 func addTool(s *server.MCPServer, tool mcp.Tool, handler server.ToolHandlerFunc) {
+	s.AddTool(withKVMArgument(tool), handler)
+}
+
+func withKVMArgument(tool mcp.Tool) mcp.Tool {
 	if tool.InputSchema.Properties == nil {
 		tool.InputSchema.Properties = map[string]interface{}{}
 	}
@@ -176,7 +180,7 @@ func addTool(s *server.MCPServer, tool mcp.Tool, handler server.ToolHandlerFunc)
 		"type":        "string",
 		"description": "ID of the JetKVM to use. Required when more than one JetKVM is configured (see list_devices); optional otherwise.",
 	}
-	s.AddTool(tool, handler)
+	return tool
 }
 
 func deviceID(req mcp.CallToolRequest) string {
