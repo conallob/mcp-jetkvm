@@ -155,7 +155,7 @@ func TakeScreenshot(ctx context.Context, client *Client) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = pc.Close() }()
+	defer pc.Close()
 
 	type result struct {
 		h264 []byte
@@ -198,7 +198,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	if err != nil {
 		return err
 	}
-	defer func() { _ = pc.Close() }()
+	defer pc.Close()
 
 	pr, pw := io.Pipe()
 	ffmpegErr := make(chan error, 1)
@@ -226,7 +226,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	})
 
 	if err := negotiate(ctx, pc, client); err != nil {
-		_ = pw.CloseWithError(err)
+		pw.CloseWithError(err)
 		waitFFmpeg(ffmpegErr)
 		return err
 	}
@@ -234,7 +234,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	var track *webrtc.TrackRemote
 	select {
 	case <-ctx.Done():
-		_ = pw.CloseWithError(ctx.Err())
+		pw.CloseWithError(ctx.Err())
 		waitFFmpeg(ffmpegErr)
 		return ctx.Err()
 	case track = <-trackReady:
@@ -258,7 +258,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 			break
 		}
 	}
-	_ = pw.Close()
+	pw.Close()
 	return <-ffmpegErr
 }
 

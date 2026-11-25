@@ -77,7 +77,7 @@ func openRPCSession(ctx context.Context, client *Client) (*rpcSession, error) {
 	ordered := true
 	dc, err := pc.CreateDataChannel(rpcChannelLabel, &webrtc.DataChannelInit{Ordered: &ordered})
 	if err != nil {
-		_ = pc.Close()
+		pc.Close()
 		return nil, fmt.Errorf("create RPC data channel: %w", err)
 	}
 
@@ -107,13 +107,13 @@ func openRPCSession(ctx context.Context, client *Client) (*rpcSession, error) {
 	dc.OnOpen(func() { close(opened) })
 
 	if err := completeNegotiation(ctx, pc, client); err != nil {
-		_ = pc.Close()
+		pc.Close()
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		_ = pc.Close()
+		pc.Close()
 		return nil, ctx.Err()
 	case <-opened:
 	}

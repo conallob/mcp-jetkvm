@@ -3,6 +3,15 @@ version: "2"
 # The default linters (errcheck, govet, ineffassign, staticcheck, unused) plus gofmt.
 linters:
   default: standard
+  settings:
+    errcheck:
+      # These cannot fail in a way a caller could act on.
+      exclude-functions:
+        # Closing a peer connection during cleanup.
+        - (*github.com/pion/webrtc/v3.PeerConnection).Close
+        # Documented to always return nil.
+        - (*io.PipeWriter).Close
+        - (*io.PipeWriter).CloseWithError
   exclusions:
     rules:
       # Tests routinely ignore cleanup and test-server write errors.
