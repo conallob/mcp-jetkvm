@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"reflect"
 	"testing"
@@ -70,6 +72,47 @@ func TestParseOptions(t *testing.T) {
 		_, showVersion, err := parseOptions([]string{"--version"}, env(nil), io.Discard)
 		if err != nil || !showVersion {
 			t.Fatalf("showVersion = %v, err = %v", showVersion, err)
+		}
+	})
+}
+
+func TestRun(t *testing.T) {
+	failIfServed := func(jetkvm.Options) error {
+		t.Fatal("must not serve")
+		return nil
+	}
+
+	t.Run("--version prints the version and does not serve", func(t *testing.T) {
+		var stdout bytes.Buffer
+		if err := run([]string{"--version"}, env(nil), &stdout, io.Discard, failIfServed); err != nil {
+			t.Fatal(err)
+		}
+		if stdout.String() != version+"\n" {
+			t.Fatalf("got %q, want %q", stdout.String(), version+"\n")
+		}
+	})
+
+	t.Run("--help does not serve and is not an error", func(t *testing.T) {
+		if err := run([]string{"--help"}, env(nil), io.Discard, io.Discard, failIfServed); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("a bad flag is an error and does not serve", func(t *testing.T) {
+		if err := run([]string{"--nope"}, env(nil), io.Discard, io.Discard, failIfServed); err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+
+	t.Run("serves with the parsed options and returns its error", func(t *testing.T) {
+		want := errors.New("boom")
+		var got jetkvm.Options
+		err := run([]string{"--http", "127.0.0.1:8080"}, env(nil), io.Discard, io.Discard, func(opts jetkvm.Options) error {
+			got = opts
+			return want
+		})
+		if err != want || got.HTTP == nil || got.HTTP.Addr != "127.0.0.1:8080" {
+			t.Fatalf("err = %v, options = %+v", err, got.HTTP)
 		}
 	})
 }

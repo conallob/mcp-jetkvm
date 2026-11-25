@@ -15,20 +15,25 @@ import (
 var version = "dev"
 
 func main() {
-	opts, showVersion, err := parseOptions(os.Args[1:], os.Getenv, os.Stderr)
+	if err := run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, jetkvm.RunServer); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// run parses the command line and either prints the version or serves.
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer, serve func(jetkvm.Options) error) error {
+	opts, showVersion, err := parseOptions(args, getenv, stderr)
 	if err == flag.ErrHelp {
-		return
+		return nil
 	}
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if showVersion {
-		fmt.Println(version)
-		return
+		_, err := fmt.Fprintln(stdout, version)
+		return err
 	}
-	if err := jetkvm.RunServer(opts); err != nil {
-		log.Fatal(err)
-	}
+	return serve(opts)
 }
 
 // parseOptions reads the command line. Secrets come from the environment
