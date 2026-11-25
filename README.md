@@ -155,6 +155,8 @@ Each tool call opens its own short-lived WebRTC session against the device and t
 
 Tagged releases are built automatically via GitHub Actions and published to GitHub Releases and the [homebrew-tap](https://github.com/conallob/homebrew-tap).
 
+Pull requests that touch the release config build a snapshot (no publishing) so a broken `.goreleaser.yaml` is caught before tagging. To try it locally: `goreleaser release --snapshot --clean --skip=publish`. `mcp-jetkvm --version` prints the release version (`dev` for a plain `go build`).
+
 To release a new version:
 
 ```sh

@@ -24,6 +24,9 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Test
+        run: go test ./...
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
