@@ -19,7 +19,14 @@ func RunServer() error {
 		server.WithToolCapabilities(false),
 	)
 
-	s.AddTool(
+	addTool(s,
+		mcp.NewTool("list_devices",
+			mcp.WithDescription("List the configured JetKVM devices (ID and host). Pass an ID as the \"kvm\" argument of any other tool to choose which JetKVM it acts on."),
+		),
+		handleListDevices,
+	)
+
+	addTool(s,
 		mcp.NewTool("take_screenshot",
 			mcp.WithDescription("Capture a screenshot from the JetKVM device. Returns a PNG image of the connected machine's display."),
 			mcp.WithString("output_path",
@@ -29,7 +36,7 @@ func RunServer() error {
 		handleTakeScreenshot,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("record_video",
 			mcp.WithDescription("Record a video clip from the JetKVM device and save it as an MP4 file."),
 			mcp.WithString("output_path",
@@ -43,21 +50,21 @@ func RunServer() error {
 		handleRecordVideo,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("list_virtual_media_files",
 			mcp.WithDescription("List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the JetKVM device and its remaining storage space. These can be mounted as a virtual USB boot device."),
 		),
 		handleListVirtualMediaFiles,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("get_virtual_media_state",
 			mcp.WithDescription("Get the image currently mounted as a virtual USB boot device on the JetKVM, if any."),
 		),
 		handleGetVirtualMediaState,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("check_virtual_media_url",
 			mcp.WithDescription("Check whether a remote HTTP(S) URL can be mounted directly as virtual media without first downloading it to the device's storage."),
 			mcp.WithString("url",
@@ -68,7 +75,7 @@ func RunServer() error {
 		handleCheckVirtualMediaURL,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("mount_virtual_media",
 			mcp.WithDescription("Mount an image as a virtual USB boot device on the JetKVM, so the connected host sees it as a CD/DVD or disk drive during boot (e.g. for OS installation). Source is either a file already on device storage, or a remote HTTP(S) URL streamed directly."),
 			mcp.WithString("source",
@@ -91,14 +98,14 @@ func RunServer() error {
 		handleMountVirtualMedia,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("unmount_virtual_media",
 			mcp.WithDescription("Unmount the currently mounted virtual USB boot device from the JetKVM."),
 		),
 		handleUnmountVirtualMedia,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("delete_virtual_media_file",
 			mcp.WithDescription("Delete an image file from the JetKVM device's local storage."),
 			mcp.WithString("filename",
@@ -109,14 +116,14 @@ func RunServer() error {
 		handleDeleteVirtualMediaFile,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("get_usb_devices",
 			mcp.WithDescription("Get which virtual USB device classes (keyboard, mice, mass storage, serial console, audio) the JetKVM currently presents to the connected host."),
 		),
 		handleGetUSBDevices,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("set_usb_devices",
 			mcp.WithDescription("Configure the full set of virtual USB device classes the JetKVM presents to the connected host. Disabling mass_storage hides any mounted virtual media from the host even if an image is mounted."),
 			mcp.WithBoolean("absolute_mouse", mcp.Required()),
@@ -129,7 +136,7 @@ func RunServer() error {
 		handleSetUSBDevices,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("set_usb_device_state",
 			mcp.WithDescription("Enable or disable a single virtual USB device class on the JetKVM without changing the others."),
 			mcp.WithString("device",
@@ -141,14 +148,14 @@ func RunServer() error {
 		handleSetUSBDeviceState,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("get_usb_emulation_state",
 			mcp.WithDescription("Check whether the JetKVM's USB Device Controller is bound, i.e. whether it is presenting any USB device to the connected host at all."),
 		),
 		handleGetUSBEmulationState,
 	)
 
-	s.AddTool(
+	addTool(s,
 		mcp.NewTool("set_usb_emulation_state",
 			mcp.WithDescription("Bind or unbind the JetKVM's USB Device Controller, turning all virtual USB device emulation to the host on or off."),
 			mcp.WithBoolean("enabled", mcp.Required()),
@@ -159,12 +166,46 @@ func RunServer() error {
 	return server.ServeStdio(s)
 }
 
-func makeClient(ctx context.Context) (*Client, error) {
-	host := os.Getenv("JETKVM_HOST")
-	if host == "" {
-		return nil, fmt.Errorf("JETKVM_HOST environment variable is required")
+// addTool registers a tool, adding the optional "kvm" argument that selects
+// which configured JetKVM the call is for.
+func addTool(s *server.MCPServer, tool mcp.Tool, handler server.ToolHandlerFunc) {
+	if tool.InputSchema.Properties == nil {
+		tool.InputSchema.Properties = map[string]interface{}{}
 	}
-	return NewClient(ctx, host, os.Getenv("JETKVM_PASSWORD"))
+	tool.InputSchema.Properties["kvm"] = map[string]interface{}{
+		"type":        "string",
+		"description": "ID of the JetKVM to use. Required when more than one JetKVM is configured (see list_devices); optional otherwise.",
+	}
+	s.AddTool(tool, handler)
+}
+
+func deviceID(req mcp.CallToolRequest) string {
+	id, _ := req.Params.Arguments["kvm"].(string)
+	return id
+}
+
+func makeClient(ctx context.Context, id string) (*Client, error) {
+	devices, err := loadDevices()
+	if err != nil {
+		return nil, err
+	}
+	device, err := pickDevice(devices, id)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(ctx, device.Host, device.Password)
+}
+
+func handleListDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	devices, err := loadDevices()
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	for _, d := range devices {
+		fmt.Fprintf(&b, "%s: %s\n", d.ID, d.Host)
+	}
+	return mcp.NewToolResultText(b.String()), nil
 }
 
 func requireFFmpeg() error {
@@ -182,7 +223,7 @@ func handleTakeScreenshot(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +272,7 @@ func handleRecordVideo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	ctx, cancel := context.WithTimeout(ctx, duration+30*time.Second)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +292,7 @@ func handleListVirtualMediaFiles(ctx context.Context, req mcp.CallToolRequest) (
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +325,7 @@ func handleGetVirtualMediaState(ctx context.Context, req mcp.CallToolRequest) (*
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +358,7 @@ func handleCheckVirtualMediaURL(ctx context.Context, req mcp.CallToolRequest) (*
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +396,7 @@ func handleMountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +427,7 @@ func handleUnmountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*m
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +447,7 @@ func handleDeleteVirtualMediaFile(ctx context.Context, req mcp.CallToolRequest) 
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +462,7 @@ func handleGetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +499,7 @@ func handleSetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -482,7 +523,7 @@ func handleSetUSBDeviceState(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +538,7 @@ func handleGetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +559,7 @@ func handleSetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, deviceID(req))
 	if err != nil {
 		return nil, err
 	}

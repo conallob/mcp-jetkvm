@@ -8,6 +8,7 @@ A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM
 
 | Tool | Description |
 |------|-------------|
+| `list_devices` | List the configured JetKVM devices (ID and host, never passwords). |
 | `take_screenshot` | Capture a PNG screenshot from the JetKVM device. Returns the image inline or saves it to a file. |
 | `record_video` | Record an MP4 video clip from the JetKVM device for 1–60 seconds. |
 | `list_virtual_media_files` | List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the device, plus remaining storage space. |
@@ -52,6 +53,35 @@ Set these environment variables before starting the server:
 |----------|----------|-------------|
 | `JETKVM_HOST` | Yes | IP address or hostname of the JetKVM device (e.g. `192.168.1.100`) |
 | `JETKVM_PASSWORD` | No | Device password (leave empty if the device is in no-password mode) |
+
+### Several JetKVM devices
+
+By default one server talks to one JetKVM. To have one server operate across several, list their IDs in `JETKVM_DEVICES` and give each its own host and password:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `JETKVM_DEVICES` | No | Comma-separated device IDs, e.g. `homelab-ctrl-1,homelab-ctrl-2`. When set, `JETKVM_HOST` and `JETKVM_PASSWORD` are ignored. |
+| `JETKVM_<ID>_HOST` | Yes, per device | Host of that device. `<ID>` is the ID upper-cased with every character other than `A-Z` and `0-9` replaced by `_` (`homelab-ctrl-1` becomes `JETKVM_HOMELAB_CTRL_1_HOST`). |
+| `JETKVM_<ID>_PASSWORD` | No | Password of that device. |
+
+Every tool then takes an optional `kvm` argument naming the device to act on. It is required when more than one device is configured, and optional when there is only one. Use `list_devices` to see the IDs.
+
+```json
+{
+  "mcpServers": {
+    "jetkvm": {
+      "command": "mcp-jetkvm",
+      "env": {
+        "JETKVM_DEVICES": "ctrl-1,ctrl-2",
+        "JETKVM_CTRL_1_HOST": "192.168.1.101",
+        "JETKVM_CTRL_1_PASSWORD": "password-1",
+        "JETKVM_CTRL_2_HOST": "192.168.1.102",
+        "JETKVM_CTRL_2_PASSWORD": "password-2"
+      }
+    }
+  }
+}
+```
 
 ## Usage with Claude Desktop
 
