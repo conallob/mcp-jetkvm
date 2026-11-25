@@ -17,8 +17,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Refresh the package index first: the runner image's cached index can
+      # name package versions the mirror has since replaced, and the install
+      # then fails with 404s.
       - name: Install ffmpeg
-        run: sudo apt-get install -y ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Download dependencies
         run: go mod download

@@ -136,7 +136,9 @@ mcp-jetkvm --http :8080 --auth oauth2 \
   --oauth-client-id mcp-jetkvm --oauth-scope kvm
 ```
 
-The server does not terminate TLS. Put it behind a TLS-terminating proxy (or a private network such as Tailscale) when using `bearer` or `oauth2` off the local machine, since tokens are sent in the clear otherwise. Each request is introspected, with no caching.
+The server does not terminate TLS. Put it behind a TLS-terminating proxy (or a private network such as Tailscale) when using `bearer` or `oauth2` off the local machine, since tokens are sent in the clear otherwise. Each request is introspected, with no caching. If the introspection endpoint cannot be reached, requests fail with 500 (the cause is logged, not returned).
+
+With `--auth none`, requests that arrive on a loopback address with a non-local `Host` header are rejected, to stop DNS rebinding. That check is off when `bearer` or `oauth2` is on, so a reverse proxy on the same machine can forward for its public name.
 
 ## How it works
 

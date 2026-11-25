@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 // AuthMode selects how HTTP requests are authenticated.
@@ -45,60 +49,76 @@ type OAuthOptions struct {
 	Scopes []string
 }
 
-// verifier reports whether a bearer token is acceptable. A non-nil error means
-// the check itself could not be made, which is not the same as a bad token.
-type verifier func(ctx context.Context, token string) (bool, error)
+// errCannotVerify is what clients see when the introspection endpoint could not
+// be reached. The cause is logged, not sent: it would reveal internal URLs.
+var errCannotVerify = errors.New("cannot verify token")
 
-func bearerVerifier(want string) verifier {
-	return func(_ context.Context, token string) (bool, error) {
-		return subtle.ConstantTimeCompare([]byte(token), []byte(want)) == 1, nil
+func bearerVerifier(want string) auth.TokenVerifier {
+	return func(_ context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(want)) != 1 {
+			return nil, auth.ErrInvalidToken
+		}
+		return &auth.TokenInfo{}, nil
 	}
 }
 
-func (o OAuthOptions) verifier() verifier {
+// verifier checks tokens by introspection. Scope and expiry are enforced by
+// auth.RequireBearerToken from the TokenInfo returned here; the audience, which
+// the SDK does not know about, is checked here.
+func (o OAuthOptions) verifier() auth.TokenVerifier {
 	client := &http.Client{Timeout: 5 * time.Second}
-	return func(ctx context.Context, token string) (bool, error) {
-		form := url.Values{"token": {token}, "token_type_hint": {"access_token"}}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.IntrospectionURL, strings.NewReader(form.Encode()))
+	return func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+		result, err := o.introspect(ctx, client, token)
 		if err != nil {
-			return false, err
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Accept", "application/json")
-		if o.ClientID != "" {
-			req.SetBasicAuth(url.QueryEscape(o.ClientID), url.QueryEscape(o.ClientSecret))
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return false, fmt.Errorf("token introspection: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false, fmt.Errorf("token introspection: HTTP %d", resp.StatusCode)
-		}
-
-		var result struct {
-			Active bool            `json:"active"`
-			Scope  string          `json:"scope"`
-			Aud    json.RawMessage `json:"aud"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return false, fmt.Errorf("token introspection: decoding response: %w", err)
+			slog.Warn("token introspection failed", "error", err)
+			return nil, errCannotVerify
 		}
 		if !result.Active {
-			return false, nil
-		}
-		granted := strings.Fields(result.Scope)
-		for _, want := range o.Scopes {
-			if !contains(granted, want) {
-				return false, nil
-			}
+			return nil, auth.ErrInvalidToken
 		}
 		if aud := audiences(result.Aud); len(aud) > 0 && !contains(aud, o.Resource) {
-			return false, nil
+			return nil, auth.ErrInvalidToken
 		}
-		return true, nil
+		info := &auth.TokenInfo{Scopes: strings.Fields(result.Scope)}
+		if result.Exp > 0 {
+			info.Expiration = time.Unix(result.Exp, 0)
+		}
+		return info, nil
 	}
+}
+
+type introspection struct {
+	Active bool            `json:"active"`
+	Scope  string          `json:"scope"`
+	Aud    json.RawMessage `json:"aud"`
+	Exp    int64           `json:"exp"`
+}
+
+// introspect asks the authorization server about token (RFC 7662).
+func (o OAuthOptions) introspect(ctx context.Context, client *http.Client, token string) (introspection, error) {
+	var result introspection
+	form := url.Values{"token": {token}, "token_type_hint": {"access_token"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.IntrospectionURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return result, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if o.ClientID != "" {
+		req.SetBasicAuth(url.QueryEscape(o.ClientID), url.QueryEscape(o.ClientSecret))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return result, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return result, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return result, fmt.Errorf("decoding response: %w", err)
+	}
+	return result, nil
 }
 
 // audiences parses the "aud" claim, which is either a string or a list.
@@ -119,30 +139,4 @@ func contains(list []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// requireToken rejects requests without an acceptable bearer token. metadataURL,
-// if set, is advertised in the challenge so OAuth clients can discover the
-// authorization server.
-func requireToken(verify verifier, metadataURL string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if found && token != "" {
-			ok, err := verify(r.Context(), token)
-			if err != nil {
-				http.Error(w, "cannot verify token", http.StatusServiceUnavailable)
-				return
-			}
-			if ok {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-		challenge := "Bearer"
-		if metadataURL != "" {
-			challenge += fmt.Sprintf(" resource_metadata=%q", metadataURL)
-		}
-		w.Header().Set("WWW-Authenticate", challenge)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-	})
 }
