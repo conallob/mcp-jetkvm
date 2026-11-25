@@ -13,8 +13,22 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// RunServer starts the MCP stdio server.
-func RunServer() error {
+// Options configures how the MCP server is served.
+type Options struct {
+	// HTTP, when non-nil, serves MCP over HTTP instead of stdio.
+	HTTP *HTTPOptions
+}
+
+// RunServer starts the MCP server on stdio, or over HTTP if opts.HTTP is set.
+func RunServer(opts Options) error {
+	s := newMCPServer()
+	if opts.HTTP != nil {
+		return serveHTTP(s, *opts.HTTP)
+	}
+	return server.ServeStdio(s)
+}
+
+func newMCPServer() *server.MCPServer {
 	s := server.NewMCPServer("mcp-jetkvm", "0.1.0",
 		server.WithToolCapabilities(false),
 	)
@@ -163,7 +177,7 @@ func RunServer() error {
 		handleSetUSBEmulationState,
 	)
 
-	return server.ServeStdio(s)
+	return s
 }
 
 // addTool registers a tool, adding the optional "kvm" argument that selects
@@ -184,7 +198,7 @@ func withKVMArgument(tool mcp.Tool) mcp.Tool {
 }
 
 func deviceID(req mcp.CallToolRequest) string {
-	id, _ := req.Params.Arguments["kvm"].(string)
+	id, _ := req.GetArguments()["kvm"].(string)
 	return id
 }
 
@@ -237,7 +251,7 @@ func handleTakeScreenshot(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		return nil, fmt.Errorf("capture screenshot: %w", err)
 	}
 
-	outputPath, _ := req.Params.Arguments["output_path"].(string)
+	outputPath, _ := req.GetArguments()["output_path"].(string)
 	if outputPath != "" {
 		if err := os.WriteFile(outputPath, png, 0o644); err != nil {
 			return nil, fmt.Errorf("writing PNG: %w", err)
@@ -257,13 +271,13 @@ func handleRecordVideo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		return nil, err
 	}
 
-	outputPath, _ := req.Params.Arguments["output_path"].(string)
+	outputPath, _ := req.GetArguments()["output_path"].(string)
 	if outputPath == "" {
 		return nil, fmt.Errorf("output_path is required")
 	}
 
 	durationSecs := 10.0
-	if d, ok := req.Params.Arguments["duration"].(float64); ok && d > 0 {
+	if d, ok := req.GetArguments()["duration"].(float64); ok && d > 0 {
 		durationSecs = d
 	}
 	if durationSecs < 1 {
@@ -354,7 +368,7 @@ func handleGetVirtualMediaState(ctx context.Context, req mcp.CallToolRequest) (*
 }
 
 func handleCheckVirtualMediaURL(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.Params.Arguments["url"].(string)
+	url, _ := req.GetArguments()["url"].(string)
 	if url == "" {
 		return nil, fmt.Errorf("url is required")
 	}
@@ -379,10 +393,10 @@ func handleCheckVirtualMediaURL(ctx context.Context, req mcp.CallToolRequest) (*
 }
 
 func handleMountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	source, _ := req.Params.Arguments["source"].(string)
-	filename, _ := req.Params.Arguments["filename"].(string)
-	url, _ := req.Params.Arguments["url"].(string)
-	modeArg, _ := req.Params.Arguments["mode"].(string)
+	source, _ := req.GetArguments()["source"].(string)
+	filename, _ := req.GetArguments()["filename"].(string)
+	url, _ := req.GetArguments()["url"].(string)
+	modeArg, _ := req.GetArguments()["mode"].(string)
 	if modeArg == "" {
 		modeArg = "cdrom"
 	}
@@ -443,7 +457,7 @@ func handleUnmountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*m
 }
 
 func handleDeleteVirtualMediaFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	filename, _ := req.Params.Arguments["filename"].(string)
+	filename, _ := req.GetArguments()["filename"].(string)
 	if filename == "" {
 		return nil, fmt.Errorf("filename is required")
 	}
@@ -493,7 +507,7 @@ func handleSetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		"serial_console": &devices.SerialConsole,
 		"audio":          &devices.Audio,
 	} {
-		v, ok := req.Params.Arguments[name].(bool)
+		v, ok := req.GetArguments()[name].(bool)
 		if !ok {
 			return nil, fmt.Errorf("%s is required", name)
 		}
@@ -515,11 +529,11 @@ func handleSetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 }
 
 func handleSetUSBDeviceState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	device, _ := req.Params.Arguments["device"].(string)
+	device, _ := req.GetArguments()["device"].(string)
 	if device == "" {
 		return nil, fmt.Errorf("device is required")
 	}
-	enabled, ok := req.Params.Arguments["enabled"].(bool)
+	enabled, ok := req.GetArguments()["enabled"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("enabled is required")
 	}
@@ -555,7 +569,7 @@ func handleGetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*
 }
 
 func handleSetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	enabled, ok := req.Params.Arguments["enabled"].(bool)
+	enabled, ok := req.GetArguments()["enabled"].(bool)
 	if !ok {
 		return nil, fmt.Errorf("enabled is required")
 	}
