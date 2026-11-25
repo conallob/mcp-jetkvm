@@ -162,6 +162,21 @@ func TestHandleMountVirtualMediaSuccess(t *testing.T) {
 		}
 	})
 
+	t.Run("as a disk", func(t *testing.T) {
+		_, client := deviceRPCServer(t, func(method string) any { return nil })
+		t.Setenv("JETKVM_HOST", client.baseURL)
+
+		res, _, err := handleMountVirtualMedia(context.Background(), nil, mountInput{
+			Source: "storage", Filename: "disk.img", Mode: "disk",
+		})
+		if err != nil {
+			t.Fatalf("handleMountVirtualMedia: %v", err)
+		}
+		if text := resultText(t, res); !strings.Contains(text, "as disk") {
+			t.Fatalf("unexpected text: %q", text)
+		}
+	})
+
 	t.Run("from http with default mode", func(t *testing.T) {
 		_, client := deviceRPCServer(t, func(method string) any { return nil })
 		t.Setenv("JETKVM_HOST", client.baseURL)
@@ -299,5 +314,23 @@ func TestHandleVirtualMediaAndUSBRPCErrorPropagation(t *testing.T) {
 	}
 	if _, _, err := handleGetUSBEmulationState(context.Background(), nil, kvmOnly{}); err == nil {
 		t.Fatal("expected error from handleGetUSBEmulationState")
+	}
+	if _, _, err := handleCheckVirtualMediaURL(context.Background(), nil, checkURLInput{URL: "http://example.com/x.iso"}); err == nil {
+		t.Fatal("expected error from handleCheckVirtualMediaURL")
+	}
+	if _, _, err := handleMountVirtualMedia(context.Background(), nil, mountInput{Source: "storage", Filename: "x.iso"}); err == nil {
+		t.Fatal("expected error from handleMountVirtualMedia (storage)")
+	}
+	if _, _, err := handleMountVirtualMedia(context.Background(), nil, mountInput{Source: "http", URL: "http://example.com/x.iso", Mode: "disk"}); err == nil {
+		t.Fatal("expected error from handleMountVirtualMedia (http)")
+	}
+	if _, _, err := handleSetUSBDevices(context.Background(), nil, setUSBDevicesInput{}); err == nil {
+		t.Fatal("expected error from handleSetUSBDevices")
+	}
+	if _, _, err := handleSetUSBDeviceState(context.Background(), nil, setUSBDeviceStateInput{Device: "audio"}); err == nil {
+		t.Fatal("expected error from handleSetUSBDeviceState")
+	}
+	if _, _, err := handleSetUSBEmulationState(context.Background(), nil, setUSBEmulationInput{}); err == nil {
+		t.Fatal("expected error from handleSetUSBEmulationState")
 	}
 }

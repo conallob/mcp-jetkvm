@@ -120,6 +120,13 @@ func TestHandleCheckVirtualMediaURLValidation(t *testing.T) {
 }
 
 func TestHandleMountVirtualMediaValidation(t *testing.T) {
+	// A reachable device, so these inputs fail on their own validation and
+	// not on connecting.
+	srv := loginOKServer(t)
+	defer srv.Close()
+	t.Setenv("JETKVM_DEVICES", "")
+	t.Setenv("JETKVM_HOST", srv.URL)
+
 	for name, in := range map[string]mountInput{
 		"invalid mode":                {Source: "storage", Filename: "x.iso", Mode: "bogus"},
 		"invalid source":              {Source: "bogus"},
@@ -155,4 +162,55 @@ func TestNewPeerConnection(t *testing.T) {
 		t.Fatal("expected non-nil PeerConnection")
 	}
 	pc.Close()
+}
+
+func TestHandlersFailWithoutADevice(t *testing.T) {
+	t.Setenv("JETKVM_DEVICES", "")
+	t.Setenv("JETKVM_HOST", "")
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"take_screenshot": func() error { _, _, err := handleTakeScreenshot(ctx, nil, screenshotInput{}); return err },
+		"record_video": func() error {
+			_, _, err := handleRecordVideo(ctx, nil, recordVideoInput{OutputPath: "/tmp/x.mp4"})
+			return err
+		},
+		"list_virtual_media_files": func() error { _, _, err := handleListVirtualMediaFiles(ctx, nil, kvmOnly{}); return err },
+		"get_virtual_media_state":  func() error { _, _, err := handleGetVirtualMediaState(ctx, nil, kvmOnly{}); return err },
+		"check_virtual_media_url": func() error {
+			_, _, err := handleCheckVirtualMediaURL(ctx, nil, checkURLInput{URL: "http://x/y.iso"})
+			return err
+		},
+		"mount_virtual_media": func() error {
+			_, _, err := handleMountVirtualMedia(ctx, nil, mountInput{Source: "storage", Filename: "x"})
+			return err
+		},
+		"unmount_virtual_media": func() error { _, _, err := handleUnmountVirtualMedia(ctx, nil, kvmOnly{}); return err },
+		"delete_virtual_media_file": func() error {
+			_, _, err := handleDeleteVirtualMediaFile(ctx, nil, deleteFileInput{Filename: "x"})
+			return err
+		},
+		"get_usb_devices": func() error { _, _, err := handleGetUSBDevices(ctx, nil, kvmOnly{}); return err },
+		"set_usb_devices": func() error { _, _, err := handleSetUSBDevices(ctx, nil, setUSBDevicesInput{}); return err },
+		"set_usb_device_state": func() error {
+			_, _, err := handleSetUSBDeviceState(ctx, nil, setUSBDeviceStateInput{Device: "audio"})
+			return err
+		},
+		"get_usb_emulation_state": func() error { _, _, err := handleGetUSBEmulationState(ctx, nil, kvmOnly{}); return err },
+		"set_usb_emulation_state": func() error { _, _, err := handleSetUSBEmulationState(ctx, nil, setUSBEmulationInput{}); return err },
+		"list_devices":            func() error { _, _, err := handleListDevices(ctx, nil, kvmOnly{}); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil {
+				t.Fatal("expected an error when no device is configured")
+			}
+		})
+	}
+}
+
+func TestRunServerRejectsBadHTTPOptions(t *testing.T) {
+	// Unauthenticated access on all interfaces is refused before listening.
+	err := RunServer(Options{HTTP: &HTTPOptions{Addr: ":8080", Auth: AuthNone}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
 }
