@@ -19,7 +19,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - id: mcp-jetkvm
@@ -48,7 +48,7 @@ brews:
     install: |
       bin.install "mcp-jetkvm"
     test: |
-      system "#{bin}/mcp-jetkvm", "--help" rescue nil
+      assert_match version.to_s, shell_output("#{bin}/mcp-jetkvm --version")
 
 changelog:
   sort: asc
