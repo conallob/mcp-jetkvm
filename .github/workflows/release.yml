@@ -27,6 +27,20 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # A short-lived token for the Homebrew tap, minted from a GitHub App
+      # installed on conallob/homebrew-tap, so there is no personal access
+      # token to expire. Creating it first means bad app credentials fail the
+      # job before anything is published.
+      - name: Create a token for the Homebrew tap
+        id: tap-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.HOMEBREW_TAP_APP_ID }}
+          private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
+          owner: conallob
+          repositories: homebrew-tap
+          permission-contents: write
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -34,4 +48,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
