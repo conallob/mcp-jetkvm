@@ -26,6 +26,12 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # Fails if go.mod or go.sum need changes, such as a missing go.sum entry
+      # after a dependency bump merged on top of other changes. That left
+      # v0.0.5's release tests unable to build.
+      - name: Check go.mod and go.sum are tidy
+        run: go mod tidy -diff
+
       - name: Build
         run: go build ./...
 
