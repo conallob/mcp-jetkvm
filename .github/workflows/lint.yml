@@ -1,0 +1,25 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Built with the Go version from go.mod: a prebuilt golangci-lint refuses
+      # to lint a module that targets a newer Go than it was built with.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+          install-mode: goinstall

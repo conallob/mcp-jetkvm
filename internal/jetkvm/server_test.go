@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 )
 
@@ -23,17 +22,13 @@ func TestRequireFFmpeg(t *testing.T) {
 		if requireFFmpeg() != nil {
 			t.Skip("ffmpeg not available in this environment")
 		}
-		orig := os.Getenv("PATH")
-		defer os.Setenv("PATH", orig)
 		if err := requireFFmpeg(); err != nil {
 			t.Fatalf("expected nil, got %v", err)
 		}
 	})
 
 	t.Run("error when not in PATH", func(t *testing.T) {
-		orig := os.Getenv("PATH")
-		defer os.Setenv("PATH", orig)
-		os.Setenv("PATH", "")
+		t.Setenv("PATH", "")
 		if err := requireFFmpeg(); err == nil {
 			t.Fatal("expected error when PATH is empty, got nil")
 		}
@@ -42,7 +37,8 @@ func TestRequireFFmpeg(t *testing.T) {
 
 func TestMakeClient(t *testing.T) {
 	t.Run("missing JETKVM_HOST", func(t *testing.T) {
-		os.Unsetenv("JETKVM_HOST")
+		t.Setenv("JETKVM_DEVICES", "")
+		t.Setenv("JETKVM_HOST", "")
 		_, err := makeClient(context.Background(), "")
 		if err == nil {
 			t.Fatal("expected error when JETKVM_HOST is unset")
@@ -52,8 +48,8 @@ func TestMakeClient(t *testing.T) {
 	t.Run("connects with JETKVM_HOST set", func(t *testing.T) {
 		srv := loginOKServer(t)
 		defer srv.Close()
-		os.Setenv("JETKVM_HOST", srv.URL)
-		defer os.Unsetenv("JETKVM_HOST")
+		t.Setenv("JETKVM_DEVICES", "")
+		t.Setenv("JETKVM_HOST", srv.URL)
 
 		c, err := makeClient(context.Background(), "")
 		if err != nil {
