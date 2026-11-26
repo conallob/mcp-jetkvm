@@ -3,7 +3,6 @@
 [![Test](https://github.com/conallob/mcp-jetkvm/actions/workflows/test.yml/badge.svg)](https://github.com/conallob/mcp-jetkvm/actions/workflows/test.yml)
 [![Lint](https://github.com/conallob/mcp-jetkvm/actions/workflows/lint.yml/badge.svg)](https://github.com/conallob/mcp-jetkvm/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/conallob/mcp-jetkvm/branch/main/graph/badge.svg)](https://codecov.io/gh/conallob/mcp-jetkvm)
-[![Go Report Card](https://goreportcard.com/badge/github.com/conallob/mcp-jetkvm)](https://goreportcard.com/report/github.com/conallob/mcp-jetkvm)
 [![Latest release](https://img.shields.io/github/v/release/conallob/mcp-jetkvm)](https://github.com/conallob/mcp-jetkvm/releases/latest)
 [![Go version](https://img.shields.io/github/go-mod/go-version/conallob/mcp-jetkvm)](go.mod)
 [![License](https://img.shields.io/github/license/conallob/mcp-jetkvm)](LICENSE)
