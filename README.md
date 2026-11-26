@@ -166,7 +166,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Add a `HOMEBREW_TAP_GITHUB_TOKEN` secret to the repository with a GitHub personal access token that has write access to `conallob/homebrew-tap`.
+The release workflow mints a short-lived token for `conallob/homebrew-tap` from a GitHub App installed on that repository, so there is no personal access token to expire. The repository needs the App's ID as the Actions variable `HOMEBREW_TAP_APP_ID` and its private key as the secret `HOMEBREW_TAP_APP_PRIVATE_KEY`.
 
 ## License
 
