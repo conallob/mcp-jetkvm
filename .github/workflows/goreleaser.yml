@@ -1,0 +1,35 @@
+name: GoReleaser
+
+# Builds the release artifacts without publishing anything, so a broken
+# .goreleaser.yaml is found on the pull request rather than when a tag is pushed.
+on:
+  pull_request:
+    paths:
+      - .goreleaser.yaml
+      - go.mod
+      - go.sum
+      - cmd/**
+      - .github/workflows/goreleaser.yml
+      - .github/workflows/release.yml
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean --skip=publish
+        env:
+          # Only used by the publish step, which is skipped.
+          HOMEBREW_TAP_GITHUB_TOKEN: unused

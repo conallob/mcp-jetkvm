@@ -8,6 +8,7 @@ A local [MCP](https://modelcontextprotocol.io) server to interact with a [JetKVM
 
 | Tool | Description |
 |------|-------------|
+| `list_devices` | List the configured JetKVM devices (ID and host, never passwords). |
 | `take_screenshot` | Capture a PNG screenshot from the JetKVM device. Returns the image inline or saves it to a file. |
 | `record_video` | Record an MP4 video clip from the JetKVM device for 1–60 seconds. |
 | `list_virtual_media_files` | List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the device, plus remaining storage space. |
@@ -53,6 +54,35 @@ Set these environment variables before starting the server:
 | `JETKVM_HOST` | Yes | IP address or hostname of the JetKVM device (e.g. `192.168.1.100`) |
 | `JETKVM_PASSWORD` | No | Device password (leave empty if the device is in no-password mode) |
 
+### Several JetKVM devices
+
+By default one server talks to one JetKVM. To have one server operate across several, list their IDs in `JETKVM_DEVICES` and give each its own host and password:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `JETKVM_DEVICES` | No | Comma-separated device IDs, e.g. `homelab-ctrl-1,homelab-ctrl-2`. When set, `JETKVM_HOST` and `JETKVM_PASSWORD` are ignored. |
+| `JETKVM_<ID>_HOST` | Yes, per device | Host of that device. `<ID>` is the ID upper-cased with every character other than `A-Z` and `0-9` replaced by `_` (`homelab-ctrl-1` becomes `JETKVM_HOMELAB_CTRL_1_HOST`). |
+| `JETKVM_<ID>_PASSWORD` | No | Password of that device. |
+
+Every tool then takes an optional `kvm` argument naming the device to act on. It is required when more than one device is configured, and optional when there is only one. Use `list_devices` to see the IDs.
+
+```json
+{
+  "mcpServers": {
+    "jetkvm": {
+      "command": "mcp-jetkvm",
+      "env": {
+        "JETKVM_DEVICES": "ctrl-1,ctrl-2",
+        "JETKVM_CTRL_1_HOST": "192.168.1.101",
+        "JETKVM_CTRL_1_PASSWORD": "password-1",
+        "JETKVM_CTRL_2_HOST": "192.168.1.102",
+        "JETKVM_CTRL_2_PASSWORD": "password-2"
+      }
+    }
+  }
+}
+```
+
 ## Usage with Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
@@ -71,6 +101,45 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
+## HTTP transport
+
+By default the server speaks MCP over stdio. `--http <addr>` serves MCP over HTTP (the streamable HTTP transport) at `/mcp` instead, so one server can be shared by several clients or machines.
+
+```sh
+mcp-jetkvm --http 127.0.0.1:8080
+```
+
+This server can send keystrokes to the connected machines and boot them from mounted images, so authentication is not optional off the local machine. `--auth` selects it:
+
+| `--auth` | Behaviour |
+|----------|-----------|
+| `none` (default) | No authentication. Refused unless the listen address is loopback (`127.0.0.1`, `::1`, `localhost`). |
+| `bearer` | Requests must carry `Authorization: Bearer <token>`. The token is read from `JETKVM_MCP_BEARER_TOKEN` (at least 16 characters, so it never appears in `ps`). |
+| `oauth2` | Requests must carry an OAuth 2.0 access token from an external authorization server. The server is a resource server: it validates tokens by [introspection (RFC 7662)](https://www.rfc-editor.org/rfc/rfc7662) and publishes [protected resource metadata (RFC 9728)](https://www.rfc-editor.org/rfc/rfc9728) so MCP clients can discover where to get a token. |
+
+OAuth 2.0 flags (all but the last two are required; the client secret is read from `JETKVM_MCP_OAUTH_CLIENT_SECRET`):
+
+| Flag | Description |
+|------|-------------|
+| `--oauth-introspection-url` | The authorization server's introspection endpoint. |
+| `--oauth-issuer` | Authorization server URL, advertised to clients. |
+| `--oauth-resource` | This server's public MCP URL, e.g. `https://kvm.example/mcp`. A token that names an audience must name this. |
+| `--oauth-client-id` | Client ID this server uses to call the introspection endpoint. |
+| `--oauth-scope` | Space-separated scopes every token must have. |
+
+```sh
+export JETKVM_MCP_OAUTH_CLIENT_SECRET=...
+mcp-jetkvm --http :8080 --auth oauth2 \
+  --oauth-introspection-url https://idp.example/oauth2/introspect \
+  --oauth-issuer https://idp.example \
+  --oauth-resource https://kvm.example/mcp \
+  --oauth-client-id mcp-jetkvm --oauth-scope kvm
+```
+
+The server does not terminate TLS. Put it behind a TLS-terminating proxy (or a private network such as Tailscale) when using `bearer` or `oauth2` off the local machine, since tokens are sent in the clear otherwise. Each request is introspected, with no caching. If the introspection endpoint cannot be reached, requests fail with 500 (the cause is logged, not returned).
+
+With `--auth none`, requests that arrive on a loopback address with a non-local `Host` header are rejected, to stop DNS rebinding. That check is off when `bearer` or `oauth2` is on, so a reverse proxy on the same machine can forward for its public name.
+
 ## How it works
 
 JetKVM streams the connected machine's display exclusively over WebRTC (H.264), and exposes device configuration (including virtual media and USB gadget settings) via JSON-RPC 2.0 over a WebRTC data channel. This server:
@@ -88,6 +157,8 @@ Each tool call opens its own short-lived WebRTC session against the device and t
 
 Tagged releases are built automatically via GitHub Actions and published to GitHub Releases and the [homebrew-tap](https://github.com/conallob/homebrew-tap).
 
+Pull requests that touch the release config build a snapshot (no publishing) so a broken `.goreleaser.yaml` is caught before tagging. To try it locally: `goreleaser release --snapshot --clean --skip=publish`. `mcp-jetkvm --version` prints the release version (`dev` for a plain `go build`).
+
 To release a new version:
 
 ```sh
@@ -95,7 +166,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Add a `HOMEBREW_TAP_GITHUB_TOKEN` secret to the repository with a GitHub personal access token that has write access to `conallob/homebrew-tap`.
+The release workflow mints a short-lived token for `conallob/homebrew-tap` from a GitHub App installed on that repository, so there is no personal access token to expire. The repository needs the App's ID as the Actions variable `HOMEBREW_TAP_APP_ID` and its private key as the secret `HOMEBREW_TAP_APP_PRIVATE_KEY`.
 
 ## License
 

@@ -1,13 +1,81 @@
 package main
 
 import (
+	"flag"
+	"fmt"
+	"io"
 	"log"
+	"os"
+	"strings"
 
 	"github.com/conallob/mcp-jetkvm/internal/jetkvm"
 )
 
+// version is set at release time: -ldflags "-X main.version=1.2.3".
+var version = "dev"
+
 func main() {
-	if err := jetkvm.RunServer(); err != nil {
+	if err := run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, jetkvm.RunServer); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// run parses the command line and either prints the version or serves.
+func run(args []string, getenv func(string) string, stdout, stderr io.Writer, serve func(jetkvm.Options) error) error {
+	opts, showVersion, err := parseOptions(args, getenv, stderr)
+	if err == flag.ErrHelp {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if showVersion {
+		_, err := fmt.Fprintln(stdout, version)
+		return err
+	}
+	return serve(opts)
+}
+
+// parseOptions reads the command line. Secrets come from the environment
+// (through getenv) rather than flags, so they stay out of process listings.
+func parseOptions(args []string, getenv func(string) string, output io.Writer) (opts jetkvm.Options, showVersion bool, err error) {
+	fs := flag.NewFlagSet("mcp-jetkvm", flag.ContinueOnError)
+	fs.SetOutput(output)
+	var (
+		showVer          = fs.Bool("version", false, "print the version and exit")
+		addr             = fs.String("http", "", "serve MCP over HTTP on this address (e.g. 127.0.0.1:8080) at /mcp, instead of stdio")
+		auth             = fs.String("auth", "none", "HTTP authentication: none (loopback only), bearer or oauth2")
+		introspectionURL = fs.String("oauth-introspection-url", "", "oauth2: the authorization server's token introspection endpoint")
+		issuer           = fs.String("oauth-issuer", "", "oauth2: authorization server URL advertised to clients")
+		resource         = fs.String("oauth-resource", "", "oauth2: this server's public MCP URL, e.g. https://host/mcp")
+		clientID         = fs.String("oauth-client-id", "", "oauth2: client ID for the introspection endpoint")
+		scopes           = fs.String("oauth-scope", "", "oauth2: space-separated scopes every token must have")
+	)
+	fs.Usage = func() {
+		fs.PrintDefaults()
+		_, _ = fmt.Fprintln(output, "secrets are read from the environment: JETKVM_MCP_BEARER_TOKEN (--auth bearer), JETKVM_MCP_OAUTH_CLIENT_SECRET (--auth oauth2)")
+	}
+	if err := fs.Parse(args); err != nil {
+		return jetkvm.Options{}, false, err
+	}
+	if *showVer {
+		return jetkvm.Options{}, true, nil
+	}
+
+	if *addr != "" {
+		opts.HTTP = &jetkvm.HTTPOptions{
+			Addr:        *addr,
+			Auth:        jetkvm.AuthMode(*auth),
+			BearerToken: getenv("JETKVM_MCP_BEARER_TOKEN"),
+			OAuth: jetkvm.OAuthOptions{
+				IntrospectionURL: *introspectionURL,
+				Issuer:           *issuer,
+				Resource:         *resource,
+				ClientID:         *clientID,
+				ClientSecret:     getenv("JETKVM_MCP_OAUTH_CLIENT_SECRET"),
+				Scopes:           strings.Fields(*scopes),
+			},
+		}
+	}
+	return opts, false, nil
 }

@@ -2,169 +2,170 @@ package jetkvm
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// RunServer starts the MCP stdio server.
-func RunServer() error {
-	s := server.NewMCPServer("mcp-jetkvm", "0.1.0",
-		server.WithToolCapabilities(false),
-	)
-
-	s.AddTool(
-		mcp.NewTool("take_screenshot",
-			mcp.WithDescription("Capture a screenshot from the JetKVM device. Returns a PNG image of the connected machine's display."),
-			mcp.WithString("output_path",
-				mcp.Description("Optional file path to save the PNG (e.g. /tmp/screen.png). If omitted the image is returned inline."),
-			),
-		),
-		handleTakeScreenshot,
-	)
-
-	s.AddTool(
-		mcp.NewTool("record_video",
-			mcp.WithDescription("Record a video clip from the JetKVM device and save it as an MP4 file."),
-			mcp.WithString("output_path",
-				mcp.Description("File path where the MP4 will be saved (e.g. /tmp/capture.mp4)."),
-				mcp.Required(),
-			),
-			mcp.WithNumber("duration",
-				mcp.Description("Recording duration in seconds (1–60, default 10)."),
-			),
-		),
-		handleRecordVideo,
-	)
-
-	s.AddTool(
-		mcp.NewTool("list_virtual_media_files",
-			mcp.WithDescription("List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the JetKVM device and its remaining storage space. These can be mounted as a virtual USB boot device."),
-		),
-		handleListVirtualMediaFiles,
-	)
-
-	s.AddTool(
-		mcp.NewTool("get_virtual_media_state",
-			mcp.WithDescription("Get the image currently mounted as a virtual USB boot device on the JetKVM, if any."),
-		),
-		handleGetVirtualMediaState,
-	)
-
-	s.AddTool(
-		mcp.NewTool("check_virtual_media_url",
-			mcp.WithDescription("Check whether a remote HTTP(S) URL can be mounted directly as virtual media without first downloading it to the device's storage."),
-			mcp.WithString("url",
-				mcp.Description("URL of the image to check (e.g. https://example.com/installer.iso)."),
-				mcp.Required(),
-			),
-		),
-		handleCheckVirtualMediaURL,
-	)
-
-	s.AddTool(
-		mcp.NewTool("mount_virtual_media",
-			mcp.WithDescription("Mount an image as a virtual USB boot device on the JetKVM, so the connected host sees it as a CD/DVD or disk drive during boot (e.g. for OS installation). Source is either a file already on device storage, or a remote HTTP(S) URL streamed directly."),
-			mcp.WithString("source",
-				mcp.Description("Where the image comes from."),
-				mcp.Enum("storage", "http"),
-				mcp.Required(),
-			),
-			mcp.WithString("filename",
-				mcp.Description("Filename of an image already stored on the device (required when source is \"storage\")."),
-			),
-			mcp.WithString("url",
-				mcp.Description("HTTP(S) URL of the image to mount (required when source is \"http\")."),
-			),
-			mcp.WithString("mode",
-				mcp.Description("How the image is presented to the host's USB controller."),
-				mcp.Enum("cdrom", "disk"),
-				mcp.DefaultString("cdrom"),
-			),
-		),
-		handleMountVirtualMedia,
-	)
-
-	s.AddTool(
-		mcp.NewTool("unmount_virtual_media",
-			mcp.WithDescription("Unmount the currently mounted virtual USB boot device from the JetKVM."),
-		),
-		handleUnmountVirtualMedia,
-	)
-
-	s.AddTool(
-		mcp.NewTool("delete_virtual_media_file",
-			mcp.WithDescription("Delete an image file from the JetKVM device's local storage."),
-			mcp.WithString("filename",
-				mcp.Description("Filename of the image to delete."),
-				mcp.Required(),
-			),
-		),
-		handleDeleteVirtualMediaFile,
-	)
-
-	s.AddTool(
-		mcp.NewTool("get_usb_devices",
-			mcp.WithDescription("Get which virtual USB device classes (keyboard, mice, mass storage, serial console, audio) the JetKVM currently presents to the connected host."),
-		),
-		handleGetUSBDevices,
-	)
-
-	s.AddTool(
-		mcp.NewTool("set_usb_devices",
-			mcp.WithDescription("Configure the full set of virtual USB device classes the JetKVM presents to the connected host. Disabling mass_storage hides any mounted virtual media from the host even if an image is mounted."),
-			mcp.WithBoolean("absolute_mouse", mcp.Required()),
-			mcp.WithBoolean("relative_mouse", mcp.Required()),
-			mcp.WithBoolean("keyboard", mcp.Required()),
-			mcp.WithBoolean("mass_storage", mcp.Required()),
-			mcp.WithBoolean("serial_console", mcp.Required()),
-			mcp.WithBoolean("audio", mcp.Required()),
-		),
-		handleSetUSBDevices,
-	)
-
-	s.AddTool(
-		mcp.NewTool("set_usb_device_state",
-			mcp.WithDescription("Enable or disable a single virtual USB device class on the JetKVM without changing the others."),
-			mcp.WithString("device",
-				mcp.Enum(usbDeviceNames...),
-				mcp.Required(),
-			),
-			mcp.WithBoolean("enabled", mcp.Required()),
-		),
-		handleSetUSBDeviceState,
-	)
-
-	s.AddTool(
-		mcp.NewTool("get_usb_emulation_state",
-			mcp.WithDescription("Check whether the JetKVM's USB Device Controller is bound, i.e. whether it is presenting any USB device to the connected host at all."),
-		),
-		handleGetUSBEmulationState,
-	)
-
-	s.AddTool(
-		mcp.NewTool("set_usb_emulation_state",
-			mcp.WithDescription("Bind or unbind the JetKVM's USB Device Controller, turning all virtual USB device emulation to the host on or off."),
-			mcp.WithBoolean("enabled", mcp.Required()),
-		),
-		handleSetUSBEmulationState,
-	)
-
-	return server.ServeStdio(s)
+// Options configures how the MCP server is served.
+type Options struct {
+	// HTTP, when non-nil, serves MCP over HTTP instead of stdio.
+	HTTP *HTTPOptions
 }
 
-func makeClient(ctx context.Context) (*Client, error) {
-	host := os.Getenv("JETKVM_HOST")
-	if host == "" {
-		return nil, fmt.Errorf("JETKVM_HOST environment variable is required")
+// RunServer starts the MCP server on stdio, or over HTTP if opts.HTTP is set.
+func RunServer(opts Options) error {
+	s := newMCPServer()
+	if opts.HTTP != nil {
+		return serveHTTP(s, *opts.HTTP)
 	}
-	return NewClient(ctx, host, os.Getenv("JETKVM_PASSWORD"))
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return s.Run(ctx, &mcp.StdioTransport{})
+}
+
+// kvmArg is embedded in every tool's input. It selects which configured
+// JetKVM the call is for.
+type kvmArg struct {
+	KVM string `json:"kvm,omitempty" jsonschema:"ID of the JetKVM to use. Required when more than one JetKVM is configured (see list_devices); optional otherwise."`
+}
+
+type kvmOnly struct{ kvmArg }
+
+type screenshotInput struct {
+	kvmArg
+	OutputPath string `json:"output_path,omitempty" jsonschema:"Optional file path to save the PNG (e.g. /tmp/screen.png). If omitted the image is returned inline."`
+}
+
+type recordVideoInput struct {
+	kvmArg
+	OutputPath string  `json:"output_path" jsonschema:"File path where the MP4 will be saved (e.g. /tmp/capture.mp4)."`
+	Duration   float64 `json:"duration,omitempty" jsonschema:"Recording duration in seconds (1-60, default 10)."`
+}
+
+type checkURLInput struct {
+	kvmArg
+	URL string `json:"url" jsonschema:"URL of the image to check (e.g. https://example.com/installer.iso)."`
+}
+
+type mountInput struct {
+	kvmArg
+	Source   string `json:"source" jsonschema:"Where the image comes from."`
+	Filename string `json:"filename,omitempty" jsonschema:"Filename of an image already stored on the device (required when source is \"storage\")."`
+	URL      string `json:"url,omitempty" jsonschema:"HTTP(S) URL of the image to mount (required when source is \"http\")."`
+	Mode     string `json:"mode,omitempty" jsonschema:"How the image is presented to the host's USB controller."`
+}
+
+type deleteFileInput struct {
+	kvmArg
+	Filename string `json:"filename" jsonschema:"Filename of the image to delete."`
+}
+
+type setUSBDevicesInput struct {
+	kvmArg
+	AbsoluteMouse bool `json:"absolute_mouse"`
+	RelativeMouse bool `json:"relative_mouse"`
+	Keyboard      bool `json:"keyboard"`
+	MassStorage   bool `json:"mass_storage"`
+	SerialConsole bool `json:"serial_console"`
+	Audio         bool `json:"audio"`
+}
+
+type setUSBDeviceStateInput struct {
+	kvmArg
+	Device  string `json:"device"`
+	Enabled bool   `json:"enabled"`
+}
+
+type setUSBEmulationInput struct {
+	kvmArg
+	Enabled bool `json:"enabled"`
+}
+
+// handler is the shape of every tool in this server. Tools report failure by
+// returning an error, which the SDK turns into an error result.
+type handler[In any] func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error)
+
+// addTool registers a tool whose input schema is inferred from In, with enums
+// constraining the named properties to the given values.
+func addTool[In any](s *mcp.Server, name, description string, enums map[string][]any, h handler[In]) {
+	schema, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("tool %s: input schema: %v", name, err))
+	}
+	for property, values := range enums {
+		schema.Properties[property].Enum = values
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description, InputSchema: schema}, mcp.ToolHandlerFor[In, any](h))
+}
+
+func newMCPServer() *mcp.Server {
+	s := mcp.NewServer(&mcp.Implementation{Name: "mcp-jetkvm", Version: "0.1.0"}, nil)
+
+	addTool(s, "list_devices", "List the configured JetKVM devices (ID and host). Pass an ID as the \"kvm\" argument of any other tool to choose which JetKVM it acts on.", nil, handleListDevices)
+	addTool(s, "take_screenshot", "Capture a screenshot from the JetKVM device. Returns a PNG image of the connected machine's display.", nil, handleTakeScreenshot)
+	addTool(s, "record_video", "Record a video clip from the JetKVM device and save it as an MP4 file.", nil, handleRecordVideo)
+	addTool(s, "list_virtual_media_files", "List image files (ISO/IMG/QCOW2/WDI/VMDK) stored on the JetKVM device and its remaining storage space. These can be mounted as a virtual USB boot device.", nil, handleListVirtualMediaFiles)
+	addTool(s, "get_virtual_media_state", "Get the image currently mounted as a virtual USB boot device on the JetKVM, if any.", nil, handleGetVirtualMediaState)
+	addTool(s, "check_virtual_media_url", "Check whether a remote HTTP(S) URL can be mounted directly as virtual media without first downloading it to the device's storage.", nil, handleCheckVirtualMediaURL)
+	addTool(s, "mount_virtual_media", "Mount an image as a virtual USB boot device on the JetKVM, so the connected host sees it as a CD/DVD or disk drive during boot (e.g. for OS installation). Source is either a file already on device storage, or a remote HTTP(S) URL streamed directly.", map[string][]any{
+		"source": {"storage", "http"},
+		"mode":   {"cdrom", "disk"},
+	}, handleMountVirtualMedia)
+	addTool(s, "unmount_virtual_media", "Unmount the currently mounted virtual USB boot device from the JetKVM.", nil, handleUnmountVirtualMedia)
+	addTool(s, "delete_virtual_media_file", "Delete an image file from the JetKVM device's local storage.", nil, handleDeleteVirtualMediaFile)
+	addTool(s, "get_usb_devices", "Get which virtual USB device classes (keyboard, mice, mass storage, serial console, audio) the JetKVM currently presents to the connected host.", nil, handleGetUSBDevices)
+	addTool(s, "set_usb_devices", "Configure the full set of virtual USB device classes the JetKVM presents to the connected host. Disabling mass_storage hides any mounted virtual media from the host even if an image is mounted.", nil, handleSetUSBDevices)
+	addTool(s, "set_usb_device_state", "Enable or disable a single virtual USB device class on the JetKVM without changing the others.", map[string][]any{
+		"device": stringsToAny(usbDeviceNames),
+	}, handleSetUSBDeviceState)
+	addTool(s, "get_usb_emulation_state", "Check whether the JetKVM's USB Device Controller is bound, i.e. whether it is presenting any USB device to the connected host at all.", nil, handleGetUSBEmulationState)
+	addTool(s, "set_usb_emulation_state", "Bind or unbind the JetKVM's USB Device Controller, turning all virtual USB device emulation to the host on or off.", nil, handleSetUSBEmulationState)
+
+	return s
+}
+
+func stringsToAny(list []string) []any {
+	out := make([]any, len(list))
+	for i, item := range list {
+		out[i] = item
+	}
+	return out
+}
+
+func text(format string, args ...any) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(format, args...)}}}
+}
+
+func makeClient(ctx context.Context, id string) (*Client, error) {
+	devices, err := loadDevices()
+	if err != nil {
+		return nil, err
+	}
+	device, err := pickDevice(devices, id)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(ctx, device.Host, device.Password)
+}
+
+func handleListDevices(_ context.Context, _ *mcp.CallToolRequest, _ kvmOnly) (*mcp.CallToolResult, any, error) {
+	devices, err := loadDevices()
+	if err != nil {
+		return nil, nil, err
+	}
+	var b strings.Builder
+	for _, d := range devices {
+		fmt.Fprintf(&b, "%s: %s\n", d.ID, d.Host)
+	}
+	return text("%s", b.String()), nil, nil
 }
 
 func requireFFmpeg() error {
@@ -174,52 +175,48 @@ func requireFFmpeg() error {
 	return nil
 }
 
-func handleTakeScreenshot(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleTakeScreenshot(ctx context.Context, _ *mcp.CallToolRequest, in screenshotInput) (*mcp.CallToolResult, any, error) {
 	if err := requireFFmpeg(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	png, err := TakeScreenshot(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("capture screenshot: %w", err)
+		return nil, nil, fmt.Errorf("capture screenshot: %w", err)
 	}
 
-	outputPath, _ := req.Params.Arguments["output_path"].(string)
-	if outputPath != "" {
-		if err := os.WriteFile(outputPath, png, 0o644); err != nil {
-			return nil, fmt.Errorf("writing PNG: %w", err)
+	if in.OutputPath != "" {
+		if err := os.WriteFile(in.OutputPath, png, 0o644); err != nil {
+			return nil, nil, fmt.Errorf("writing PNG: %w", err)
 		}
-		return mcp.NewToolResultText("Screenshot saved to " + outputPath), nil
+		return text("Screenshot saved to %s", in.OutputPath), nil, nil
 	}
 
-	return mcp.NewToolResultImage(
-		"Screenshot from JetKVM device",
-		base64.StdEncoding.EncodeToString(png),
-		"image/png",
-	), nil
+	return &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.TextContent{Text: "Screenshot from JetKVM device"},
+		&mcp.ImageContent{Data: png, MIMEType: "image/png"},
+	}}, nil, nil
 }
 
-func handleRecordVideo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleRecordVideo(ctx context.Context, _ *mcp.CallToolRequest, in recordVideoInput) (*mcp.CallToolResult, any, error) {
 	if err := requireFFmpeg(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
-	outputPath, _ := req.Params.Arguments["output_path"].(string)
-	if outputPath == "" {
-		return nil, fmt.Errorf("output_path is required")
+	if in.OutputPath == "" {
+		return nil, nil, fmt.Errorf("output_path is required")
 	}
 
 	durationSecs := 10.0
-	if d, ok := req.Params.Arguments["duration"].(float64); ok && d > 0 {
-		durationSecs = d
+	if in.Duration > 0 {
+		durationSecs = in.Duration
 	}
 	if durationSecs < 1 {
 		durationSecs = 1
@@ -231,45 +228,43 @@ func handleRecordVideo(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	ctx, cancel := context.WithTimeout(ctx, duration+30*time.Second)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if err := RecordVideo(ctx, client, outputPath, duration); err != nil {
-		return nil, fmt.Errorf("record video: %w", err)
+	if err := RecordVideo(ctx, client, in.OutputPath, duration); err != nil {
+		return nil, nil, fmt.Errorf("record video: %w", err)
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Video recorded to %s (%.0fs)", outputPath, durationSecs)), nil
+	return text("Video recorded to %s (%.0fs)", in.OutputPath, durationSecs), nil, nil
 }
 
 // rpcTimeout bounds the WebRTC RPC session setup + call for the virtual
 // media / USB device configuration tools below.
 const rpcTimeout = 20 * time.Second
 
-func handleListVirtualMediaFiles(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleListVirtualMediaFiles(ctx context.Context, _ *mcp.CallToolRequest, in kvmOnly) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	files, err := ListStorageFiles(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("list storage files: %w", err)
+		return nil, nil, fmt.Errorf("list storage files: %w", err)
 	}
 	space, err := GetStorageSpace(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("get storage space: %w", err)
+		return nil, nil, fmt.Errorf("get storage space: %w", err)
 	}
 
 	if len(files.Files) == 0 {
-		return mcp.NewToolResultText(fmt.Sprintf(
-			"No image files stored on the device. Storage: %d bytes used, %d bytes free.",
-			space.BytesUsed, space.BytesFree,
-		)), nil
+		return text("No image files stored on the device. Storage: %d bytes used, %d bytes free.",
+			space.BytesUsed, space.BytesFree), nil, nil
 	}
 
 	var b strings.Builder
@@ -277,67 +272,60 @@ func handleListVirtualMediaFiles(ctx context.Context, req mcp.CallToolRequest) (
 	for _, f := range files.Files {
 		fmt.Fprintf(&b, "- %s (%d bytes, created %s)\n", f.Filename, f.Size, f.CreatedAt)
 	}
-	return mcp.NewToolResultText(b.String()), nil
+	return text("%s", b.String()), nil, nil
 }
 
-func handleGetVirtualMediaState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleGetVirtualMediaState(ctx context.Context, _ *mcp.CallToolRequest, in kvmOnly) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	state, err := GetVirtualMediaState(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("get virtual media state: %w", err)
+		return nil, nil, fmt.Errorf("get virtual media state: %w", err)
 	}
 
 	if state.Source == "" {
-		return mcp.NewToolResultText("No virtual media is currently mounted."), nil
+		return text("No virtual media is currently mounted."), nil, nil
 	}
 
 	name := state.Filename
 	if state.Source == SourceHTTP {
 		name = state.URL
 	}
-	return mcp.NewToolResultText(fmt.Sprintf(
-		"Mounted: %s (source=%s, mode=%s, %d bytes)",
-		name, state.Source, state.Mode, state.Size,
-	)), nil
+	return text("Mounted: %s (source=%s, mode=%s, %d bytes)", name, state.Source, state.Mode, state.Size), nil, nil
 }
 
-func handleCheckVirtualMediaURL(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	url, _ := req.Params.Arguments["url"].(string)
-	if url == "" {
-		return nil, fmt.Errorf("url is required")
+func handleCheckVirtualMediaURL(ctx context.Context, _ *mcp.CallToolRequest, in checkURLInput) (*mcp.CallToolResult, any, error) {
+	if in.URL == "" {
+		return nil, nil, fmt.Errorf("url is required")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	info, err := CheckMountURL(ctx, client, url)
+	info, err := CheckMountURL(ctx, client, in.URL)
 	if err != nil {
-		return nil, fmt.Errorf("check mount URL: %w", err)
+		return nil, nil, fmt.Errorf("check mount URL: %w", err)
 	}
 
 	if !info.Usable {
-		return mcp.NewToolResultText(fmt.Sprintf("URL is not directly mountable: %s", info.Reason)), nil
+		return text("URL is not directly mountable: %s", info.Reason), nil, nil
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("URL is mountable directly (%d bytes).", info.Size)), nil
+	return text("URL is mountable directly (%d bytes).", info.Size), nil, nil
 }
 
-func handleMountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	source, _ := req.Params.Arguments["source"].(string)
-	filename, _ := req.Params.Arguments["filename"].(string)
-	url, _ := req.Params.Arguments["url"].(string)
-	modeArg, _ := req.Params.Arguments["mode"].(string)
+func handleMountVirtualMedia(ctx context.Context, _ *mcp.CallToolRequest, in mountInput) (*mcp.CallToolResult, any, error) {
+	modeArg := in.Mode
 	if modeArg == "" {
 		modeArg = "cdrom"
 	}
@@ -349,182 +337,161 @@ func handleMountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	case "disk":
 		mode = ModeDisk
 	default:
-		return nil, fmt.Errorf("mode must be \"cdrom\" or \"disk\", got %q", modeArg)
+		return nil, nil, fmt.Errorf("mode must be \"cdrom\" or \"disk\", got %q", modeArg)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	switch source {
+	switch in.Source {
 	case "storage":
-		if filename == "" {
-			return nil, fmt.Errorf("filename is required when source is \"storage\"")
+		if in.Filename == "" {
+			return nil, nil, fmt.Errorf("filename is required when source is \"storage\"")
 		}
-		if err := MountWithStorage(ctx, client, filename, mode); err != nil {
-			return nil, fmt.Errorf("mount virtual media: %w", err)
+		if err := MountWithStorage(ctx, client, in.Filename, mode); err != nil {
+			return nil, nil, fmt.Errorf("mount virtual media: %w", err)
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Mounted %s from storage as %s.", filename, modeArg)), nil
+		return text("Mounted %s from storage as %s.", in.Filename, modeArg), nil, nil
 	case "http":
-		if url == "" {
-			return nil, fmt.Errorf("url is required when source is \"http\"")
+		if in.URL == "" {
+			return nil, nil, fmt.Errorf("url is required when source is \"http\"")
 		}
-		if err := MountWithHTTP(ctx, client, url, mode); err != nil {
-			return nil, fmt.Errorf("mount virtual media: %w", err)
+		if err := MountWithHTTP(ctx, client, in.URL, mode); err != nil {
+			return nil, nil, fmt.Errorf("mount virtual media: %w", err)
 		}
-		return mcp.NewToolResultText(fmt.Sprintf("Mounted %s over HTTP as %s.", url, modeArg)), nil
+		return text("Mounted %s over HTTP as %s.", in.URL, modeArg), nil, nil
 	default:
-		return nil, fmt.Errorf("source must be \"storage\" or \"http\", got %q", source)
+		return nil, nil, fmt.Errorf("source must be \"storage\" or \"http\", got %q", in.Source)
 	}
 }
 
-func handleUnmountVirtualMedia(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleUnmountVirtualMedia(ctx context.Context, _ *mcp.CallToolRequest, in kvmOnly) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := UnmountImage(ctx, client); err != nil {
-		return nil, fmt.Errorf("unmount virtual media: %w", err)
+		return nil, nil, fmt.Errorf("unmount virtual media: %w", err)
 	}
-	return mcp.NewToolResultText("Virtual media unmounted."), nil
+	return text("Virtual media unmounted."), nil, nil
 }
 
-func handleDeleteVirtualMediaFile(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	filename, _ := req.Params.Arguments["filename"].(string)
-	if filename == "" {
-		return nil, fmt.Errorf("filename is required")
+func handleDeleteVirtualMediaFile(ctx context.Context, _ *mcp.CallToolRequest, in deleteFileInput) (*mcp.CallToolResult, any, error) {
+	if in.Filename == "" {
+		return nil, nil, fmt.Errorf("filename is required")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if err := DeleteStorageFile(ctx, client, filename); err != nil {
-		return nil, fmt.Errorf("delete storage file: %w", err)
+	if err := DeleteStorageFile(ctx, client, in.Filename); err != nil {
+		return nil, nil, fmt.Errorf("delete storage file: %w", err)
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("Deleted %s from device storage.", filename)), nil
+	return text("Deleted %s from device storage.", in.Filename), nil, nil
 }
 
-func handleGetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleGetUSBDevices(ctx context.Context, _ *mcp.CallToolRequest, in kvmOnly) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	devices, err := GetUSBDevices(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("get USB devices: %w", err)
+		return nil, nil, fmt.Errorf("get USB devices: %w", err)
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf(
-		"absolute_mouse=%t relative_mouse=%t keyboard=%t mass_storage=%t serial_console=%t audio=%t",
+	return text("absolute_mouse=%t relative_mouse=%t keyboard=%t mass_storage=%t serial_console=%t audio=%t",
 		devices.AbsoluteMouse, devices.RelativeMouse, devices.Keyboard,
-		devices.MassStorage, devices.SerialConsole, devices.Audio,
-	)), nil
+		devices.MassStorage, devices.SerialConsole, devices.Audio), nil, nil
 }
 
-func handleSetUSBDevices(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	devices := USBDevices{}
-	for name, dst := range map[string]*bool{
-		"absolute_mouse": &devices.AbsoluteMouse,
-		"relative_mouse": &devices.RelativeMouse,
-		"keyboard":       &devices.Keyboard,
-		"mass_storage":   &devices.MassStorage,
-		"serial_console": &devices.SerialConsole,
-		"audio":          &devices.Audio,
-	} {
-		v, ok := req.Params.Arguments[name].(bool)
-		if !ok {
-			return nil, fmt.Errorf("%s is required", name)
-		}
-		*dst = v
-	}
-
+func handleSetUSBDevices(ctx context.Context, _ *mcp.CallToolRequest, in setUSBDevicesInput) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	devices := USBDevices{
+		AbsoluteMouse: in.AbsoluteMouse,
+		RelativeMouse: in.RelativeMouse,
+		Keyboard:      in.Keyboard,
+		MassStorage:   in.MassStorage,
+		SerialConsole: in.SerialConsole,
+		Audio:         in.Audio,
+	}
 	if err := SetUSBDevices(ctx, client, devices); err != nil {
-		return nil, fmt.Errorf("set USB devices: %w", err)
+		return nil, nil, fmt.Errorf("set USB devices: %w", err)
 	}
-	return mcp.NewToolResultText("USB devices updated."), nil
+	return text("USB devices updated."), nil, nil
 }
 
-func handleSetUSBDeviceState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	device, _ := req.Params.Arguments["device"].(string)
-	if device == "" {
-		return nil, fmt.Errorf("device is required")
-	}
-	enabled, ok := req.Params.Arguments["enabled"].(bool)
-	if !ok {
-		return nil, fmt.Errorf("enabled is required")
+func handleSetUSBDeviceState(ctx context.Context, _ *mcp.CallToolRequest, in setUSBDeviceStateInput) (*mcp.CallToolResult, any, error) {
+	if in.Device == "" {
+		return nil, nil, fmt.Errorf("device is required")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if err := SetUSBDeviceState(ctx, client, device, enabled); err != nil {
-		return nil, fmt.Errorf("set USB device state: %w", err)
+	if err := SetUSBDeviceState(ctx, client, in.Device, in.Enabled); err != nil {
+		return nil, nil, fmt.Errorf("set USB device state: %w", err)
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("%s %s.", device, map[bool]string{true: "enabled", false: "disabled"}[enabled])), nil
+	return text("%s %s.", in.Device, map[bool]string{true: "enabled", false: "disabled"}[in.Enabled]), nil, nil
 }
 
-func handleGetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleGetUSBEmulationState(ctx context.Context, _ *mcp.CallToolRequest, in kvmOnly) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	enabled, err := GetUSBEmulationState(ctx, client)
 	if err != nil {
-		return nil, fmt.Errorf("get USB emulation state: %w", err)
+		return nil, nil, fmt.Errorf("get USB emulation state: %w", err)
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("USB emulation enabled: %t", enabled)), nil
+	return text("USB emulation enabled: %t", enabled), nil, nil
 }
 
-func handleSetUSBEmulationState(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	enabled, ok := req.Params.Arguments["enabled"].(bool)
-	if !ok {
-		return nil, fmt.Errorf("enabled is required")
-	}
-
+func handleSetUSBEmulationState(ctx context.Context, _ *mcp.CallToolRequest, in setUSBEmulationInput) (*mcp.CallToolResult, any, error) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
-	client, err := makeClient(ctx)
+	client, err := makeClient(ctx, in.KVM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	if err := SetUSBEmulationState(ctx, client, enabled); err != nil {
-		return nil, fmt.Errorf("set USB emulation state: %w", err)
+	if err := SetUSBEmulationState(ctx, client, in.Enabled); err != nil {
+		return nil, nil, fmt.Errorf("set USB emulation state: %w", err)
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("USB emulation %s.", map[bool]string{true: "enabled", false: "disabled"}[enabled])), nil
+	return text("USB emulation %s.", map[bool]string{true: "enabled", false: "disabled"}[in.Enabled]), nil, nil
 }

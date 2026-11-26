@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/exec"
 	"time"
 
@@ -226,7 +227,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 
 	if err := negotiate(ctx, pc, client); err != nil {
 		pw.CloseWithError(err)
-		<-ffmpegErr
+		waitFFmpeg(ffmpegErr)
 		return err
 	}
 
@@ -234,7 +235,7 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	select {
 	case <-ctx.Done():
 		pw.CloseWithError(ctx.Err())
-		<-ffmpegErr
+		waitFFmpeg(ffmpegErr)
 		return ctx.Err()
 	case track = <-trackReady:
 	}
@@ -259,4 +260,12 @@ func RecordVideo(ctx context.Context, client *Client, outputPath string, duratio
 	}
 	pw.Close()
 	return <-ffmpegErr
+}
+
+// waitFFmpeg waits for ffmpeg to exit. It is used on paths that are already
+// returning a more useful error, so ffmpeg's own is only logged.
+func waitFFmpeg(done <-chan error) {
+	if err := <-done; err != nil {
+		slog.Debug("ffmpeg exited", "error", err)
+	}
 }

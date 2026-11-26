@@ -4,10 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
-
-	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // loginOKServer returns a test server that accepts any login request.
@@ -25,17 +22,13 @@ func TestRequireFFmpeg(t *testing.T) {
 		if requireFFmpeg() != nil {
 			t.Skip("ffmpeg not available in this environment")
 		}
-		orig := os.Getenv("PATH")
-		defer os.Setenv("PATH", orig)
 		if err := requireFFmpeg(); err != nil {
 			t.Fatalf("expected nil, got %v", err)
 		}
 	})
 
 	t.Run("error when not in PATH", func(t *testing.T) {
-		orig := os.Getenv("PATH")
-		defer os.Setenv("PATH", orig)
-		os.Setenv("PATH", "")
+		t.Setenv("PATH", "")
 		if err := requireFFmpeg(); err == nil {
 			t.Fatal("expected error when PATH is empty, got nil")
 		}
@@ -44,8 +37,9 @@ func TestRequireFFmpeg(t *testing.T) {
 
 func TestMakeClient(t *testing.T) {
 	t.Run("missing JETKVM_HOST", func(t *testing.T) {
-		os.Unsetenv("JETKVM_HOST")
-		_, err := makeClient(context.Background())
+		t.Setenv("JETKVM_DEVICES", "")
+		t.Setenv("JETKVM_HOST", "")
+		_, err := makeClient(context.Background(), "")
 		if err == nil {
 			t.Fatal("expected error when JETKVM_HOST is unset")
 		}
@@ -54,10 +48,10 @@ func TestMakeClient(t *testing.T) {
 	t.Run("connects with JETKVM_HOST set", func(t *testing.T) {
 		srv := loginOKServer(t)
 		defer srv.Close()
-		os.Setenv("JETKVM_HOST", srv.URL)
-		defer os.Unsetenv("JETKVM_HOST")
+		t.Setenv("JETKVM_DEVICES", "")
+		t.Setenv("JETKVM_HOST", srv.URL)
 
-		c, err := makeClient(context.Background())
+		c, err := makeClient(context.Background(), "")
 		if err != nil {
 			t.Fatalf("makeClient: %v", err)
 		}
@@ -67,74 +61,47 @@ func TestMakeClient(t *testing.T) {
 	})
 }
 
-func callToolRequest(args map[string]interface{}) mcp.CallToolRequest {
-	var req mcp.CallToolRequest
-	req.Params.Arguments = args
-	return req
-}
-
 func TestHandleRecordVideoValidation(t *testing.T) {
 	t.Run("missing output_path", func(t *testing.T) {
 		if requireFFmpeg() != nil {
 			t.Skip("ffmpeg not available")
 		}
-		req := callToolRequest(map[string]interface{}{})
-		_, err := handleRecordVideo(context.Background(), req)
-		if err == nil {
+		if _, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{}); err == nil {
 			t.Fatal("expected error for missing output_path")
 		}
 	})
 
 	t.Run("no ffmpeg", func(t *testing.T) {
-		orig := os.Getenv("PATH")
-		os.Setenv("PATH", "")
-		defer os.Setenv("PATH", orig)
-
-		req := callToolRequest(map[string]interface{}{"output_path": "/tmp/out.mp4"})
-		_, err := handleRecordVideo(context.Background(), req)
-		if err == nil {
+		t.Setenv("PATH", "")
+		if _, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{OutputPath: "/tmp/out.mp4"}); err == nil {
 			t.Fatal("expected error when ffmpeg is missing")
 		}
 	})
 }
 
 func TestHandleTakeScreenshotNoFFmpeg(t *testing.T) {
-	orig := os.Getenv("PATH")
-	os.Setenv("PATH", "")
-	defer os.Setenv("PATH", orig)
-
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleTakeScreenshot(context.Background(), req)
-	if err == nil {
+	t.Setenv("PATH", "")
+	if _, _, err := handleTakeScreenshot(context.Background(), nil, screenshotInput{}); err == nil {
 		t.Fatal("expected error when ffmpeg is missing")
 	}
 }
 
 func TestHandleRecordVideoDurationClamping(t *testing.T) {
-	cases := []struct {
-		name  string
-		input interface{}
-	}{
-		{"below minimum", float64(0)},
-		{"above maximum", float64(120)},
-		{"default (no value)", nil},
-		{"valid mid-range", float64(30)},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, duration := range map[string]float64{
+		"below minimum":      0,
+		"above maximum":      120,
+		"default (no value)": 0,
+		"valid mid-range":    30,
+	} {
+		t.Run(name, func(t *testing.T) {
 			if requireFFmpeg() != nil {
 				t.Skip("ffmpeg not available")
 			}
-			os.Unsetenv("JETKVM_HOST")
-			args := map[string]interface{}{"output_path": "/tmp/out.mp4"}
-			if tc.input != nil {
-				args["duration"] = tc.input
-			}
-			req := callToolRequest(args)
-			_, err := handleRecordVideo(context.Background(), req)
-			// We expect a "JETKVM_HOST" error — that means we passed
-			// validation and clamping and reached makeClient.
+			t.Setenv("JETKVM_DEVICES", "")
+			t.Setenv("JETKVM_HOST", "")
+			// No device is configured, so reaching makeClient fails: that
+			// means validation and clamping were passed.
+			_, _, err := handleRecordVideo(context.Background(), nil, recordVideoInput{OutputPath: "/tmp/out.mp4", Duration: duration})
 			if err == nil {
 				t.Fatal("expected error from makeClient, got nil")
 			}
@@ -143,92 +110,42 @@ func TestHandleRecordVideoDurationClamping(t *testing.T) {
 }
 
 func TestHandleCheckVirtualMediaURLValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleCheckVirtualMediaURL(context.Background(), req)
-	if err == nil {
+	if _, _, err := handleCheckVirtualMediaURL(context.Background(), nil, checkURLInput{}); err == nil {
 		t.Fatal("expected error for missing url")
 	}
 }
 
 func TestHandleMountVirtualMediaValidation(t *testing.T) {
-	t.Run("invalid mode", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "storage", "filename": "x.iso", "mode": "bogus"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for invalid mode")
-		}
-	})
+	// A reachable device, so these inputs fail on their own validation and
+	// not on connecting.
+	srv := loginOKServer(t)
+	defer srv.Close()
+	t.Setenv("JETKVM_DEVICES", "")
+	t.Setenv("JETKVM_HOST", srv.URL)
 
-	t.Run("invalid source", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "bogus"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for invalid source")
-		}
-	})
-
-	t.Run("storage source missing filename", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "storage"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing filename")
-		}
-	})
-
-	t.Run("http source missing url", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"source": "http"})
-		_, err := handleMountVirtualMedia(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing url")
-		}
-	})
+	for name, in := range map[string]mountInput{
+		"invalid mode":                {Source: "storage", Filename: "x.iso", Mode: "bogus"},
+		"invalid source":              {Source: "bogus"},
+		"storage source missing file": {Source: "storage"},
+		"http source missing url":     {Source: "http"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := handleMountVirtualMedia(context.Background(), nil, in); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
 }
 
 func TestHandleDeleteVirtualMediaFileValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleDeleteVirtualMediaFile(context.Background(), req)
-	if err == nil {
+	if _, _, err := handleDeleteVirtualMediaFile(context.Background(), nil, deleteFileInput{}); err == nil {
 		t.Fatal("expected error for missing filename")
 	}
 }
 
-func TestHandleSetUSBDevicesValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{
-		"absolute_mouse": true,
-		"relative_mouse": true,
-		"keyboard":       true,
-		"mass_storage":   true,
-		// serial_console and audio omitted
-	})
-	_, err := handleSetUSBDevices(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for missing boolean fields")
-	}
-}
-
 func TestHandleSetUSBDeviceStateValidation(t *testing.T) {
-	t.Run("missing device", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"enabled": true})
-		_, err := handleSetUSBDeviceState(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing device")
-		}
-	})
-
-	t.Run("missing enabled", func(t *testing.T) {
-		req := callToolRequest(map[string]interface{}{"device": "massStorage"})
-		_, err := handleSetUSBDeviceState(context.Background(), req)
-		if err == nil {
-			t.Fatal("expected error for missing enabled")
-		}
-	})
-}
-
-func TestHandleSetUSBEmulationStateValidation(t *testing.T) {
-	req := callToolRequest(map[string]interface{}{})
-	_, err := handleSetUSBEmulationState(context.Background(), req)
-	if err == nil {
-		t.Fatal("expected error for missing enabled")
+	if _, _, err := handleSetUSBDeviceState(context.Background(), nil, setUSBDeviceStateInput{Enabled: true}); err == nil {
+		t.Fatal("expected error for missing device")
 	}
 }
 
@@ -241,4 +158,55 @@ func TestNewPeerConnection(t *testing.T) {
 		t.Fatal("expected non-nil PeerConnection")
 	}
 	pc.Close()
+}
+
+func TestHandlersFailWithoutADevice(t *testing.T) {
+	t.Setenv("JETKVM_DEVICES", "")
+	t.Setenv("JETKVM_HOST", "")
+	ctx := context.Background()
+	for name, call := range map[string]func() error{
+		"take_screenshot": func() error { _, _, err := handleTakeScreenshot(ctx, nil, screenshotInput{}); return err },
+		"record_video": func() error {
+			_, _, err := handleRecordVideo(ctx, nil, recordVideoInput{OutputPath: "/tmp/x.mp4"})
+			return err
+		},
+		"list_virtual_media_files": func() error { _, _, err := handleListVirtualMediaFiles(ctx, nil, kvmOnly{}); return err },
+		"get_virtual_media_state":  func() error { _, _, err := handleGetVirtualMediaState(ctx, nil, kvmOnly{}); return err },
+		"check_virtual_media_url": func() error {
+			_, _, err := handleCheckVirtualMediaURL(ctx, nil, checkURLInput{URL: "http://x/y.iso"})
+			return err
+		},
+		"mount_virtual_media": func() error {
+			_, _, err := handleMountVirtualMedia(ctx, nil, mountInput{Source: "storage", Filename: "x"})
+			return err
+		},
+		"unmount_virtual_media": func() error { _, _, err := handleUnmountVirtualMedia(ctx, nil, kvmOnly{}); return err },
+		"delete_virtual_media_file": func() error {
+			_, _, err := handleDeleteVirtualMediaFile(ctx, nil, deleteFileInput{Filename: "x"})
+			return err
+		},
+		"get_usb_devices": func() error { _, _, err := handleGetUSBDevices(ctx, nil, kvmOnly{}); return err },
+		"set_usb_devices": func() error { _, _, err := handleSetUSBDevices(ctx, nil, setUSBDevicesInput{}); return err },
+		"set_usb_device_state": func() error {
+			_, _, err := handleSetUSBDeviceState(ctx, nil, setUSBDeviceStateInput{Device: "audio"})
+			return err
+		},
+		"get_usb_emulation_state": func() error { _, _, err := handleGetUSBEmulationState(ctx, nil, kvmOnly{}); return err },
+		"set_usb_emulation_state": func() error { _, _, err := handleSetUSBEmulationState(ctx, nil, setUSBEmulationInput{}); return err },
+		"list_devices":            func() error { _, _, err := handleListDevices(ctx, nil, kvmOnly{}); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); err == nil {
+				t.Fatal("expected an error when no device is configured")
+			}
+		})
+	}
+}
+
+func TestRunServerRejectsBadHTTPOptions(t *testing.T) {
+	// Unauthenticated access on all interfaces is refused before listening.
+	err := RunServer(Options{HTTP: &HTTPOptions{Addr: ":8080", Auth: AuthNone}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
 }

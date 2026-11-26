@@ -178,7 +178,7 @@ func callRPC(ctx context.Context, client *Client, method string, params map[stri
 	if err != nil {
 		return fmt.Errorf("open RPC session: %w", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	callCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
