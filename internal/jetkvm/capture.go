@@ -57,12 +57,18 @@ func completeNegotiation(ctx context.Context, pc *webrtc.PeerConnection, client 
 	case <-gatherDone:
 	}
 
-	answer, err := client.ExchangeSDP(ctx, pc.LocalDescription())
+	answer, sig, err := client.ExchangeSDP(ctx, pc.LocalDescription())
 	if err != nil {
 		return err
 	}
 	if err := pc.SetRemoteDescription(*answer); err != nil {
+		if sig != nil {
+			sig.Close()
+		}
 		return fmt.Errorf("set remote description: %w", err)
+	}
+	if sig != nil {
+		sig.attach(pc)
 	}
 	return nil
 }

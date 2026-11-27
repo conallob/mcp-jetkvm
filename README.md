@@ -164,13 +164,20 @@ docker run --rm -p 8080:8080 \
 JetKVM streams the connected machine's display exclusively over WebRTC (H.264), and exposes device configuration (including virtual media and USB gadget settings) via JSON-RPC 2.0 over a WebRTC data channel. This server:
 
 1. Authenticates with the device (`POST /auth/login-local`)
-2. Establishes a WebRTC session via the legacy SDP exchange endpoint (`POST /webrtc/session`)
+2. Establishes a WebRTC session over the device's signaling WebSocket (`/webrtc/signaling/client`, authenticated with the login cookie): it sends the SDP offer, receives the answer, and adds the ICE candidates the device trickles afterwards. Firmware before 0.5.9 has no WebSocket and is served by the old one-shot `POST /webrtc/session` instead
 3. For **screenshots/video**: receives the H.264 RTP video stream via [pion/webrtc](https://github.com/pion/webrtc)
    - **screenshots**: captures the first IDR keyframe and decodes it to PNG via `ffmpeg`
    - **video**: pipes H.264 NAL units into `ffmpeg` and muxes them into a fragmented MP4
 4. For **virtual media / USB device tools**: opens the `rpc` data channel and issues JSON-RPC 2.0 requests (e.g. `mountWithStorage`, `getUsbDevices`), matching responses by request ID
 
 Each tool call opens its own short-lived WebRTC session against the device and tears it down afterward.
+
+### Keeping up with the firmware
+
+The signaling protocol is an internal interface of the JetKVM firmware, not a documented API, and it has changed before (the HTTP endpoint was dropped in [jetkvm/kvm#1569](https://github.com/jetkvm/kvm/pull/1569)). Two things guard against that:
+
+- `TestFirmwareContract` checks every endpoint, message type, cookie name and RPC method this server uses against a checkout of the firmware source. The `firmware-contract` workflow runs it weekly against firmware `main` and the latest release, so a breaking change fails CI before it breaks a device. To run it by hand: `JETKVM_FIRMWARE_DIR=/path/to/jetkvm-kvm go test -run TestFirmwareContract ./internal/jetkvm`.
+- `TestLiveDevice` runs login, the RPC channel and a video track against real hardware: `JETKVM_LIVE_HOST=<host> JETKVM_LIVE_PASSWORD=<password> go test -run TestLiveDevice -v ./internal/jetkvm`. It only reads state.
 
 ## Releases
 

@@ -3,6 +3,7 @@ module github.com/conallob/mcp-jetkvm
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pion/rtp v1.10.6

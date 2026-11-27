@@ -1,0 +1,59 @@
+name: Firmware contract
+
+# Checks the protocol assumptions in internal/jetkvm against the JetKVM
+# firmware source, so an upstream change fails here instead of on a device.
+# See TestFirmwareContract.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "internal/jetkvm/**"
+      - ".github/workflows/firmware-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [main, latest-release]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The firmware tags stable releases as release/X.Y.Z and dev builds as
+      # release/X.Y.Z-devYYYYMMDDHHMM; the newest stable tag is what devices run.
+      - name: Resolve firmware ref
+        id: ref
+        run: |
+          if [ "${{ matrix.firmware }}" = main ]; then
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          else
+            tag=$(git ls-remote --tags https://github.com/jetkvm/kvm 'refs/tags/release/*' \
+              | grep -v '\^{}' | sed 's#.*refs/tags/##' | grep -v -- '-dev' | sort -V | tail -1)
+            test -n "$tag"
+            echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the firmware
+        uses: actions/checkout@v7
+        with:
+          repository: jetkvm/kvm
+          ref: ${{ steps.ref.outputs.ref }}
+          path: firmware
+          lfs: false
+
+      - name: Contract test
+        env:
+          JETKVM_FIRMWARE_DIR: ${{ github.workspace }}/firmware
+        run: go test -count=1 -run TestFirmwareContract -v ./internal/jetkvm

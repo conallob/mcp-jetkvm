@@ -2,9 +2,7 @@ package jetkvm
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -76,101 +74,27 @@ func TestDecodeRPCMessage(t *testing.T) {
 	})
 }
 
-// deviceRPCServer starts a test HTTP server that behaves like a JetKVM
-// device for login and SDP exchange, and answers every offer with a real
-// WebRTC peer connection whose "rpc" data channel messages are handled by respond.
+// newDeviceRPCServer starts a fake JetKVM device (see newFakeDevice) whose
+// "rpc" data channel messages are handled by respond.
 func newDeviceRPCServer(t *testing.T, respond func(req jsonrpcRequest) jsonrpcResponse) (*httptest.Server, *Client) {
 	t.Helper()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/webrtc/session", func(w http.ResponseWriter, r *http.Request) {
-		var wire struct {
-			SD string `json:"sd"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-			t.Errorf("decode offer envelope: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		raw, err := base64.StdEncoding.DecodeString(wire.SD)
-		if err != nil {
-			t.Errorf("decode offer base64: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var offerEnv sdpEnvelope
-		if err := json.Unmarshal(raw, &offerEnv); err != nil {
-			t.Errorf("unmarshal offer: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		devicePC, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-		if err != nil {
-			t.Errorf("device NewPeerConnection: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		t.Cleanup(func() { devicePC.Close() })
-
-		devicePC.OnDataChannel(func(dc *webrtc.DataChannel) {
-			dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-				var req jsonrpcRequest
-				if err := json.Unmarshal(msg.Data, &req); err != nil {
-					return
-				}
-				resp := respond(req)
-				resp.JSONRPC = "2.0"
-				resp.ID = &req.ID
-				respRaw, _ := json.Marshal(resp)
-				_ = dc.SendText(string(respRaw))
+	return newFakeDevice(t, fakeDeviceOpts{
+		OnDevicePC: func(devicePC *webrtc.PeerConnection) {
+			devicePC.OnDataChannel(func(dc *webrtc.DataChannel) {
+				dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+					var req jsonrpcRequest
+					if err := json.Unmarshal(msg.Data, &req); err != nil {
+						return
+					}
+					resp := respond(req)
+					resp.JSONRPC = "2.0"
+					resp.ID = &req.ID
+					respRaw, _ := json.Marshal(resp)
+					_ = dc.SendText(string(respRaw))
+				})
 			})
-		})
-
-		if err := devicePC.SetRemoteDescription(webrtc.SessionDescription{
-			Type: webrtc.SDPTypeOffer,
-			SDP:  offerEnv.SDP,
-		}); err != nil {
-			t.Errorf("device SetRemoteDescription: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		answer, err := devicePC.CreateAnswer(nil)
-		if err != nil {
-			t.Errorf("device CreateAnswer: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		gatherDone := webrtc.GatheringCompletePromise(devicePC)
-		if err := devicePC.SetLocalDescription(answer); err != nil {
-			t.Errorf("device SetLocalDescription: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		<-gatherDone
-
-		answerRaw, _ := json.Marshal(sdpEnvelope{
-			Type: "answer",
-			SDP:  devicePC.LocalDescription().SDP,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"sd": base64.StdEncoding.EncodeToString(answerRaw),
-		})
+		},
 	})
-
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	client, err := NewClient(context.Background(), srv.URL, "")
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	return srv, client
 }
 
 // deviceRPCServer answers every RPC call with a canned successful result
@@ -226,20 +150,7 @@ func TestRPCCallRemoteError(t *testing.T) {
 }
 
 func TestOpenRPCSessionNegotiationFailure(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/webrtc/session", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	client, err := NewClient(context.Background(), srv.URL, "")
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	_, client := newFakeDevice(t, fakeDeviceOpts{RejectOffer: true})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
