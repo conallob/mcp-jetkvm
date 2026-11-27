@@ -145,6 +145,20 @@ The server does not terminate TLS. Put it behind a TLS-terminating proxy (or a p
 
 With `--auth none`, requests that arrive on a loopback address with a non-local `Host` header are rejected, to stop DNS rebinding. That check is off when `bearer` or `oauth2` is on, so a reverse proxy on the same machine can forward for its public name.
 
+### Container image
+
+Tagged releases also publish a multi-arch (amd64/arm64) image with ffmpeg
+included, `ghcr.io/conallob/mcp-jetkvm:<version>`. It defaults to
+`--http :8080 --auth bearer`, so set `JETKVM_MCP_BEARER_TOKEN` and the device
+variables above:
+
+```sh
+docker run --rm -p 8080:8080 \
+  -e JETKVM_MCP_BEARER_TOKEN=... \
+  -e JETKVM_HOST=192.168.1.100 -e JETKVM_PASSWORD=... \
+  ghcr.io/conallob/mcp-jetkvm:0.1.0
+```
+
 ## How it works
 
 JetKVM streams the connected machine's display exclusively over WebRTC (H.264), and exposes device configuration (including virtual media and USB gadget settings) via JSON-RPC 2.0 over a WebRTC data channel. This server:
