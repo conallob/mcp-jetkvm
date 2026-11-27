@@ -14,7 +14,7 @@ func connect(t *testing.T) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	serverSession, err := newMCPServer().Connect(ctx, serverTransport, nil)
+	serverSession, err := newMCPServer("test").Connect(ctx, serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,6 +25,33 @@ func connect(t *testing.T) *mcp.ClientSession {
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	return session
+}
+
+// The server reports the version it was built with, not a constant, and says
+// "dev" when it isn't told one (a plain `go build`).
+func TestServerVersion(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"given", "1.2.3", "1.2.3"},
+		{"default", "", "dev"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			clientTransport, serverTransport := mcp.NewInMemoryTransports()
+			serverSession, err := newMCPServer(tc.in).Connect(ctx, serverTransport, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = serverSession.Close() }()
+			session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, clientTransport, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = session.Close() }()
+			if got := session.InitializeResult().ServerInfo.Version; got != tc.want {
+				t.Fatalf("ServerInfo.Version = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 type toolSchema struct {

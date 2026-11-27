@@ -60,7 +60,7 @@ func request(h http.Handler, authorization string) *httptest.ResponseRecorder {
 }
 
 func TestBearerAuth(t *testing.T) {
-	h, err := HTTPOptions{Addr: ":8080", Auth: AuthBearer, BearerToken: testToken}.handler(newMCPServer())
+	h, err := HTTPOptions{Addr: ":8080", Auth: AuthBearer, BearerToken: testToken}.handler(newMCPServer("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func oauthHandler(t *testing.T, idpURL string, scopes ...string) http.Handler {
 		ClientID:         "client",
 		ClientSecret:     "s3cret",
 		Scopes:           scopes,
-	}}.handler(newMCPServer())
+	}}.handler(newMCPServer("test"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestOAuthHandler(t *testing.T) {
 func TestMCPOverHTTP(t *testing.T) {
 	t.Setenv("JETKVM_DEVICES", "")
 	t.Setenv("JETKVM_HOST", "kvm.example")
-	h, err := HTTPOptions{Addr: ":8080", Auth: AuthBearer, BearerToken: testToken}.handler(newMCPServer())
+	h, err := HTTPOptions{Addr: ":8080", Auth: AuthBearer, BearerToken: testToken}.handler(newMCPServer("test"))
 	if err != nil {
 		t.Fatal(err)
 	}

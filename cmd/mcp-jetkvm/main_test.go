@@ -114,5 +114,8 @@ func TestRun(t *testing.T) {
 		if err != want || got.HTTP == nil || got.HTTP.Addr != "127.0.0.1:8080" {
 			t.Fatalf("err = %v, options = %+v", err, got.HTTP)
 		}
+		if got.Version != version {
+			t.Fatalf("Version = %q, want the build's %q", got.Version, version)
+		}
 	})
 }
