@@ -29,6 +29,21 @@ archives:
       - LICENSE
       - README.md
 
+# Multi-arch image for running the HTTP transport in a container (the lab runs
+# it on arm64 Kubernetes nodes). Needs QEMU + buildx on the runner, see
+# .github/workflows/release.yml.
+dockers_v2:
+  - id: mcp-jetkvm
+    ids: [mcp-jetkvm]
+    images:
+      - ghcr.io/conallob/mcp-jetkvm
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
 checksum:
   name_template: checksums.txt
 
