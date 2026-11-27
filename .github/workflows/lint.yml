@@ -19,7 +19,7 @@ jobs:
 
       # Built with the Go version from go.mod: a prebuilt golangci-lint refuses
       # to lint a module that targets a newer Go than it was built with.
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
           install-mode: goinstall
