@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/pion/webrtc/v3"
 )
@@ -52,95 +55,113 @@ func TestNewClientLoginFailure(t *testing.T) {
 	}
 }
 
-// sdpServer builds a test server that handles login and returns a synthetic SDP answer.
-func sdpServer(t *testing.T, sdpHandler http.HandlerFunc) (*httptest.Server, *Client) {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/webrtc/session", sdpHandler)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	c, err := NewClient(context.Background(), srv.URL, "")
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	return srv, c
-}
-
-func encodedSDP(sdpType, sdp string) string {
-	raw, _ := json.Marshal(sdpEnvelope{Type: sdpType, SDP: sdp})
-	return base64.StdEncoding.EncodeToString(raw)
+func quoted(s string) *string {
+	b, _ := json.Marshal(s)
+	q := string(b)
+	return &q
 }
 
 func TestExchangeSDP(t *testing.T) {
-	offer := &webrtc.SessionDescription{
-		Type: webrtc.SDPTypeOffer,
-		SDP:  "v=0\r\n",
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	t.Run("success", func(t *testing.T) {
-		_, c := sdpServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"sd": encodedSDP("answer", "v=0\r\nanswer\r\n"),
-			})
-		})
-		answer, err := c.ExchangeSDP(context.Background(), offer)
+	t.Run("signaling WebSocket", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{})
+		answer, sig, err := c.ExchangeSDP(ctx, realOffer(t))
 		if err != nil {
 			t.Fatalf("ExchangeSDP: %v", err)
 		}
-		if answer.Type != webrtc.SDPTypeAnswer {
-			t.Fatalf("expected answer type, got %v", answer.Type)
+		if sig == nil {
+			t.Fatal("expected a signaling session from a device with a WebSocket")
 		}
-		if answer.SDP != "v=0\r\nanswer\r\n" {
-			t.Fatalf("unexpected SDP: %q", answer.SDP)
+		defer sig.Close()
+		if answer.Type != webrtc.SDPTypeAnswer || answer.SDP == "" {
+			t.Fatalf("unexpected answer: %+v", answer)
+		}
+
+		// The device trickles candidates after the answer; they must arrive.
+		select {
+		case cand, ok := <-sig.candidates:
+			if !ok {
+				t.Fatal("candidates channel closed before any candidate")
+			}
+			if cand.Candidate == "" {
+				t.Fatal("empty candidate")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no trickled candidate received")
 		}
 	})
 
-	t.Run("HTTP error", func(t *testing.T) {
-		_, c := sdpServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		})
-		_, err := c.ExchangeSDP(context.Background(), offer)
-		if err == nil {
-			t.Fatal("expected error on HTTP 500")
+	t.Run("legacy HTTP endpoint when there is no WebSocket", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{Legacy: true})
+		answer, sig, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err != nil {
+			t.Fatalf("ExchangeSDP: %v", err)
+		}
+		if sig != nil {
+			t.Fatal("legacy exchange should not return a signaling session")
+		}
+		if answer.Type != webrtc.SDPTypeAnswer || answer.SDP == "" {
+			t.Fatalf("unexpected answer: %+v", answer)
 		}
 	})
 
-	t.Run("invalid base64 in response", func(t *testing.T) {
-		_, c := sdpServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"sd": "!!!not-base64!!!"})
-		})
-		_, err := c.ExchangeSDP(context.Background(), offer)
-		if err == nil {
+	t.Run("device rejects the offer", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{RejectOffer: true})
+		_, _, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err == nil || !strings.Contains(err.Error(), "rejected") {
+			t.Fatalf("expected a rejection error, got %v", err)
+		}
+	})
+
+	t.Run("invalid base64 answer", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{AnswerData: quoted("!!!not-base64!!!")})
+		if _, _, err := c.ExchangeSDP(ctx, realOffer(t)); err == nil {
 			t.Fatal("expected error on invalid base64")
 		}
 	})
 
-	t.Run("invalid JSON inside base64", func(t *testing.T) {
-		_, c := sdpServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			bad := base64.StdEncoding.EncodeToString([]byte("not-json"))
-			json.NewEncoder(w).Encode(map[string]string{"sd": bad})
-		})
-		_, err := c.ExchangeSDP(context.Background(), offer)
-		if err == nil {
+	t.Run("invalid JSON inside base64 answer", func(t *testing.T) {
+		bad := base64.StdEncoding.EncodeToString([]byte("not-json"))
+		_, c := newFakeDevice(t, fakeDeviceOpts{AnswerData: quoted(bad)})
+		if _, _, err := c.ExchangeSDP(ctx, realOffer(t)); err == nil {
 			t.Fatal("expected error on invalid inner JSON")
 		}
 	})
 
-	t.Run("malformed outer JSON", func(t *testing.T) {
-		_, c := sdpServer(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("{bad json"))
-		})
-		_, err := c.ExchangeSDP(context.Background(), offer)
-		if err == nil {
-			t.Fatal("expected error on malformed outer JSON")
+	t.Run("socket without the login cookie is refused", func(t *testing.T) {
+		srv, _ := newFakeDevice(t, fakeDeviceOpts{})
+		// A client that never logged in carries no authToken cookie.
+		jar, _ := cookiejar.New(nil)
+		c := &Client{baseURL: srv.URL, http: &http.Client{Jar: jar}}
+		_, _, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err == nil || !strings.Contains(err.Error(), "401") {
+			t.Fatalf("expected an HTTP 401 error, got %v", err)
+		}
+	})
+
+	t.Run("legacy endpoint errors", func(t *testing.T) {
+		for name, handler := range map[string]http.HandlerFunc{
+			"HTTP 500": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) },
+			"malformed outer JSON": func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("{bad json"))
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				mux := http.NewServeMux()
+				mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+				mux.HandleFunc("/webrtc/session", handler)
+				srv := httptest.NewServer(mux)
+				defer srv.Close()
+				c, err := NewClient(context.Background(), srv.URL, "")
+				if err != nil {
+					t.Fatalf("NewClient: %v", err)
+				}
+				if _, _, err := c.ExchangeSDP(ctx, realOffer(t)); err == nil {
+					t.Fatal("expected error")
+				}
+			})
 		}
 	})
 }

@@ -2,9 +2,6 @@ package jetkvm
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -219,106 +216,19 @@ func TestCaptureKeyframeDirect(t *testing.T) {
 	}
 }
 
-// answeringVideoServer behaves like a JetKVM device for login and SDP
-// exchange, answering every offer with a real WebRTC peer connection that
-// never sends any media. Used to exercise negotiate()'s success path and the
-// ctx-timeout branches of TakeScreenshot/RecordVideo without needing ffmpeg.
+// answeringVideoServer is a fake device that answers every offer with a real
+// WebRTC peer connection that never sends any media. Used to exercise
+// negotiate()'s success path and the ctx-timeout branches of
+// TakeScreenshot/RecordVideo without needing ffmpeg.
 func answeringVideoServer(t *testing.T) (*httptest.Server, *Client) {
 	t.Helper()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/webrtc/session", func(w http.ResponseWriter, r *http.Request) {
-		var wire struct {
-			SD string `json:"sd"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
-			t.Errorf("decode offer envelope: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		raw, err := base64.StdEncoding.DecodeString(wire.SD)
-		if err != nil {
-			t.Errorf("decode offer base64: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var offerEnv sdpEnvelope
-		if err := json.Unmarshal(raw, &offerEnv); err != nil {
-			t.Errorf("unmarshal offer: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		devicePC, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-		if err != nil {
-			t.Errorf("device NewPeerConnection: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		t.Cleanup(func() { devicePC.Close() })
-
-		if err := devicePC.SetRemoteDescription(webrtc.SessionDescription{
-			Type: webrtc.SDPTypeOffer,
-			SDP:  offerEnv.SDP,
-		}); err != nil {
-			t.Errorf("device SetRemoteDescription: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		answer, err := devicePC.CreateAnswer(nil)
-		if err != nil {
-			t.Errorf("device CreateAnswer: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		gatherDone := webrtc.GatheringCompletePromise(devicePC)
-		if err := devicePC.SetLocalDescription(answer); err != nil {
-			t.Errorf("device SetLocalDescription: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		<-gatherDone
-
-		answerRaw, _ := json.Marshal(sdpEnvelope{
-			Type: "answer",
-			SDP:  devicePC.LocalDescription().SDP,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"sd": base64.StdEncoding.EncodeToString(answerRaw),
-		})
-	})
-
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	client, err := NewClient(context.Background(), srv.URL, "")
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	return srv, client
+	return newFakeDevice(t, fakeDeviceOpts{})
 }
 
+// negotiationFailureServer is a fake device that rejects every offer.
 func negotiationFailureServer(t *testing.T) *Client {
 	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/login-local", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("/webrtc/session", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	client, err := NewClient(context.Background(), srv.URL, "")
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	_, client := newFakeDevice(t, fakeDeviceOpts{RejectOffer: true})
 	return client
 }
 
