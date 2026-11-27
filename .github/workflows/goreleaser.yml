@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - .goreleaser.yaml
+      - Dockerfile
       - go.mod
       - go.sum
       - cmd/**
@@ -24,6 +25,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # The image build runs `apk add` for linux/arm64, which needs QEMU.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - uses: goreleaser/goreleaser-action@v7
         with:
