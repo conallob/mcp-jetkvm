@@ -33,6 +33,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, se
 		_, err := fmt.Fprintln(stdout, version)
 		return err
 	}
+	opts.Version = version
 	return serve(opts)
 }
 

@@ -18,11 +18,14 @@ import (
 type Options struct {
 	// HTTP, when non-nil, serves MCP over HTTP instead of stdio.
 	HTTP *HTTPOptions
+
+	// Version is reported to clients as the server's version. Empty means "dev".
+	Version string
 }
 
 // RunServer starts the MCP server on stdio, or over HTTP if opts.HTTP is set.
 func RunServer(opts Options) error {
-	s := newMCPServer()
+	s := newMCPServer(opts.Version)
 	if opts.HTTP != nil {
 		return serveHTTP(s, *opts.HTTP)
 	}
@@ -106,8 +109,11 @@ func addTool[In any](s *mcp.Server, name, description string, enums map[string][
 	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description, InputSchema: schema}, mcp.ToolHandlerFor[In, any](h))
 }
 
-func newMCPServer() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "mcp-jetkvm", Version: "0.1.0"}, nil)
+func newMCPServer(version string) *mcp.Server {
+	if version == "" {
+		version = "dev"
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: "mcp-jetkvm", Version: version}, nil)
 
 	addTool(s, "list_devices", "List the configured JetKVM devices (ID and host). Pass an ID as the \"kvm\" argument of any other tool to choose which JetKVM it acts on.", nil, handleListDevices)
 	addTool(s, "take_screenshot", "Capture a screenshot from the JetKVM device. Returns a PNG image of the connected machine's display.", nil, handleTakeScreenshot)
