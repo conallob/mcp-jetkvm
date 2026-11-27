@@ -71,12 +71,11 @@ type sdpEnvelope struct {
 	SDP  string `json:"sdp"`
 }
 
-func encodeSDP(desc *webrtc.SessionDescription) (string, error) {
-	raw, err := json.Marshal(sdpEnvelope{Type: desc.Type.String(), SDP: desc.SDP})
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(raw), nil
+// encodeSDP returns the device's wire format for a session description:
+// base64(JSON({type,sdp})).
+func encodeSDP(desc *webrtc.SessionDescription) string {
+	raw, _ := json.Marshal(sdpEnvelope{Type: desc.Type.String(), SDP: desc.SDP}) // two strings: cannot fail
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func decodeAnswer(b64 string) (*webrtc.SessionDescription, error) {
@@ -177,13 +176,9 @@ func (s *signaling) exchange(ctx context.Context, offer *webrtc.SessionDescripti
 		s.queueCandidate(msg)
 	}
 
-	sd, err := encodeSDP(offer)
-	if err != nil {
-		return nil, err
-	}
 	if err := wsjson.Write(ctx, s.conn, map[string]any{
 		"type": "offer",
-		"data": map[string]string{"sd": sd},
+		"data": map[string]string{"sd": encodeSDP(offer)},
 	}); err != nil {
 		return nil, fmt.Errorf("signaling: sending offer: %w", err)
 	}
@@ -278,11 +273,7 @@ func (c *Client) ExchangeSDP(ctx context.Context, offer *webrtc.SessionDescripti
 // firmware before 0.5.9 offers. The device uses base64(JSON({type,sdp})) as
 // the wire format.
 func (c *Client) exchangeSDPLegacy(ctx context.Context, offer *webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
-	sd, err := encodeSDP(offer)
-	if err != nil {
-		return nil, err
-	}
-	body, _ := json.Marshal(map[string]string{"sd": sd})
+	body, _ := json.Marshal(map[string]string{"sd": encodeSDP(offer)})
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+legacySessionPath, strings.NewReader(string(body)))

@@ -165,3 +165,162 @@ func TestExchangeSDP(t *testing.T) {
 		}
 	})
 }
+
+func TestSignalingURL(t *testing.T) {
+	for _, tc := range []struct{ base, want string }{
+		{"http://kvm.local", "ws://kvm.local" + signalingPath},
+		{"http://10.0.0.5:8080", "ws://10.0.0.5:8080" + signalingPath},
+		{"https://kvm.example.com", "wss://kvm.example.com" + signalingPath},
+	} {
+		if got := (&Client{baseURL: tc.base}).signalingURL(); got != tc.want {
+			t.Errorf("signalingURL(%q) = %q, want %q", tc.base, got, tc.want)
+		}
+	}
+}
+
+func TestExchangeSDPFailureModes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	t.Run("device unreachable is not mistaken for old firmware", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close() // nothing listens any more
+		c := &Client{baseURL: url, http: &http.Client{}}
+		_, _, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err == nil || !strings.Contains(err.Error(), "signaling:") {
+			t.Fatalf("expected a signaling dial error, got %v", err)
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		opts fakeDeviceOpts
+		want string
+	}{
+		"socket closes before the greeting":    {fakeDeviceOpts{CloseBeforeGreeting: true}, "waiting for device"},
+		"socket closes before the answer":      {fakeDeviceOpts{CloseAfterOffer: true}, "waiting for answer"},
+		"answer data is not a string":          {fakeDeviceOpts{AnswerData: ptr("123")}, "parsing SDP answer"},
+		"answer string is not valid base64":    {fakeDeviceOpts{AnswerData: quoted("!!!")}, "base64"},
+		"offer rejected with an error message": {fakeDeviceOpts{RejectOffer: true}, "rejected"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, c := newFakeDevice(t, tc.opts)
+			_, _, err := c.ExchangeSDP(ctx, realOffer(t))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected an error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+
+	t.Run("candidate that arrives before the greeting is kept", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{CandidateBeforeGreeting: true})
+		_, sig, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err != nil {
+			t.Fatalf("ExchangeSDP: %v", err)
+		}
+		defer sig.Close()
+		select {
+		case cand := <-sig.candidates:
+			if cand.Candidate != fakeCandidate {
+				t.Fatalf("unexpected first candidate %q", cand.Candidate)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("early candidate was dropped")
+		}
+	})
+
+	t.Run("unknown and malformed messages are ignored", func(t *testing.T) {
+		_, c := newFakeDevice(t, fakeDeviceOpts{Noise: true})
+		answer, sig, err := c.ExchangeSDP(ctx, realOffer(t))
+		if err != nil {
+			t.Fatalf("ExchangeSDP: %v", err)
+		}
+		defer sig.Close()
+		if answer.SDP == "" {
+			t.Fatal("expected an answer despite the noise")
+		}
+		// Only the real candidates may come through, never an empty one.
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case cand, ok := <-sig.candidates:
+				if !ok {
+					return
+				}
+				if cand.Candidate == "" {
+					t.Fatal("an empty candidate got through")
+				}
+			case <-deadline:
+				return
+			}
+		}
+	})
+}
+
+// A full candidates buffer must not block the reader once the session is over.
+func TestQueueCandidateStopsWhenSessionEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s := &signaling{ctx: ctx, candidates: make(chan webrtc.ICECandidateInit)} // unbuffered, nobody reading
+
+	done := make(chan struct{})
+	go func() {
+		s.queueCandidate(signalMessage{
+			Type: "new-ice-candidate",
+			Data: json.RawMessage(`{"candidate":"` + fakeCandidate + `"}`),
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queueCandidate blocked on a finished session")
+	}
+}
+
+func TestExchangeSDPLegacyRequestFailures(t *testing.T) {
+	ctx := context.Background()
+	offer := &webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: "v=0\r\n"}
+
+	t.Run("request cannot be built", func(t *testing.T) {
+		c := &Client{baseURL: "http://bad\x7fhost", http: &http.Client{}}
+		if _, err := c.exchangeSDPLegacy(ctx, offer); err == nil {
+			t.Fatal("expected an error for an invalid URL")
+		}
+	})
+
+	t.Run("request cannot be sent", func(t *testing.T) {
+		srv := httptest.NewServer(http.NotFoundHandler())
+		url := srv.URL
+		srv.Close()
+		c := &Client{baseURL: url, http: &http.Client{}}
+		_, err := c.exchangeSDPLegacy(ctx, offer)
+		if err == nil || !strings.Contains(err.Error(), "SDP exchange") {
+			t.Fatalf("expected an SDP exchange error, got %v", err)
+		}
+	})
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// An answer that parses but that the peer connection rejects must close the
+// signaling socket instead of leaking it.
+func TestNegotiateBadAnswerClosesSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	garbage, _ := json.Marshal(sdpEnvelope{Type: "answer", SDP: "this is not sdp"})
+	_, c := newFakeDevice(t, fakeDeviceOpts{
+		AnswerData: quoted(base64.StdEncoding.EncodeToString(garbage)),
+	})
+	pc, err := newPeerConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+
+	err = negotiate(ctx, pc, c)
+	if err == nil || !strings.Contains(err.Error(), "set remote description") {
+		t.Fatalf("expected a set remote description error, got %v", err)
+	}
+}

@@ -30,6 +30,16 @@ type fakeDeviceOpts struct {
 	// AnswerData, when set, is sent as the "data" of the answer message in
 	// place of a real answer.
 	AnswerData *string
+	// CloseBeforeGreeting drops the socket before the device-metadata greeting.
+	CloseBeforeGreeting bool
+	// CandidateBeforeGreeting trickles a candidate ahead of the greeting.
+	CandidateBeforeGreeting bool
+	// CloseAfterOffer drops the socket when the offer arrives, with no answer.
+	CloseAfterOffer bool
+	// Noise sends messages the client must ignore (an unknown type, a
+	// candidate with unparseable data, a candidate with no candidate string)
+	// before the answer.
+	Noise bool
 	// OnDevicePC configures the device-side peer connection before the
 	// offer is applied (for example to attach data channel handlers).
 	OnDevicePC func(*webrtc.PeerConnection)
@@ -100,6 +110,15 @@ func newFakeDevice(t *testing.T, opts fakeDeviceOpts) (*httptest.Server, *Client
 
 func serveFakeSignaling(t *testing.T, ctx context.Context, conn *websocket.Conn, opts fakeDeviceOpts) {
 	t.Helper()
+	if opts.CloseBeforeGreeting {
+		return
+	}
+	if opts.CandidateBeforeGreeting {
+		_ = wsjson.Write(ctx, conn, map[string]any{
+			"type": "new-ice-candidate",
+			"data": webrtc.ICECandidateInit{Candidate: fakeCandidate},
+		})
+	}
 	if err := wsjson.Write(ctx, conn, map[string]any{
 		"type": "device-metadata",
 		"data": map[string]string{"deviceVersion": "0.0.0-test"},
@@ -117,6 +136,9 @@ func serveFakeSignaling(t *testing.T, ctx context.Context, conn *websocket.Conn,
 		if msg.Type != "offer" {
 			continue
 		}
+		if opts.CloseAfterOffer {
+			return
+		}
 		if opts.RejectOffer {
 			_ = wsjson.Write(ctx, conn, map[string]any{"error": map[string]any{}})
 			continue
@@ -132,6 +154,11 @@ func serveFakeSignaling(t *testing.T, ctx context.Context, conn *websocket.Conn,
 		if err != nil {
 			t.Errorf("fake device: %v", err)
 			return
+		}
+		if opts.Noise {
+			_ = wsjson.Write(ctx, conn, map[string]any{"type": "stats", "data": map[string]int{"rtt": 1}})
+			_ = wsjson.Write(ctx, conn, map[string]any{"type": "new-ice-candidate", "data": "not-an-object"})
+			_ = wsjson.Write(ctx, conn, map[string]any{"type": "new-ice-candidate", "data": map[string]string{"candidate": ""}})
 		}
 		data := any(answerSD)
 		if opts.AnswerData != nil {
